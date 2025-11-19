@@ -35,7 +35,20 @@
       "Bash(rimraf:*)",
       "Bash(rd /s /q dist)",
       "Bash(git init:*)",
-      "Bash(git add:*)"
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git remote add:*)",
+      "Bash(git branch:*)",
+      "Bash(git push:*)",
+      "Bash(git rm:*)",
+      "Bash(node scripts/apply-migration.js:*)",
+      "Bash(node scripts/check-database.js:*)",
+      "Bash(node scripts/check-columns.js:*)",
+      "Bash(timeout:*)",
+      "Bash(powershell -Command \"Stop-Process -Id 63496 -Force\")",
+      "Bash(src/app.ts)",
+      "Bash(node:*)",
+      "Bash(more:*)"
     ],
     "deny": [],
     "ask": []

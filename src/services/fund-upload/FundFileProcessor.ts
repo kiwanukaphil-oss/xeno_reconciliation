@@ -7,6 +7,7 @@ import { EntityCreator } from './entity-management/EntityCreator';
 import { UploadBatchManager } from './database/UploadBatchManager';
 import { FundTransactionRepository } from './database/FundTransactionRepository';
 import { ParsedFundTransaction } from '../../types/fundTransaction';
+import { GoalTransactionService } from '../reporting/GoalTransactionService';
 
 /**
  * Main processor for fund transaction file uploads
@@ -112,7 +113,8 @@ export class FundFileProcessor {
    * Resumes processing after entity approval
    */
   static async resumeProcessing(batchId: string, filePath: string): Promise<void> {
-    logger.info(`Resuming processing for batch ${batchId} after approval`);
+    logger.info('=== RESUMING PROCESSING AFTER APPROVAL ===');
+    logger.info(`Batch ID: ${batchId}, File path: ${filePath}`);
 
     try {
       // Get batch details
@@ -121,6 +123,7 @@ export class FundFileProcessor {
         throw new Error(`Batch ${batchId} not found`);
       }
 
+      logger.info(`Batch found, newEntitiesStatus: ${batch.newEntitiesStatus}`);
       if (batch.newEntitiesStatus !== 'APPROVED') {
         throw new Error('Entities have not been approved');
       }
@@ -129,14 +132,20 @@ export class FundFileProcessor {
       logger.info('Creating approved entities');
       const newEntitiesReport = batch.newEntitiesReport as any;
       await EntityCreator.createApprovedEntities(newEntitiesReport, batchId);
+      logger.info('Approved entities created successfully');
 
       // Re-parse and validate file
       logger.info('Re-parsing file');
       const transactions = await UnifiedFileParser.parseFile(filePath);
+      logger.info(`Parsed ${transactions.length} transactions`);
+
       const validationResult = FundTransactionValidator.validateBatch(transactions);
+      logger.info(`Validation complete: ${validationResult.validTransactions.length} valid, ${validationResult.invalidTransactions.length} invalid`);
 
       // Save transactions
+      logger.info('Calling finalizeProcessing...');
       await this.finalizeProcessing(batchId, validationResult.validTransactions);
+      logger.info('finalizeProcessing completed');
     } catch (error: any) {
       logger.error(`Resume processing failed for batch ${batchId}:`, error);
       await UploadBatchManager.updateBatchWithError(batchId, error);
@@ -151,6 +160,8 @@ export class FundFileProcessor {
     batchId: string,
     transactions: ParsedFundTransaction[]
   ): Promise<void> {
+    logger.info('=== ENTERING FINALIZE PROCESSING ===');
+    logger.info(`Batch ID: ${batchId}, Transactions to save: ${transactions.length}`);
     logger.info('Step 5: Saving transactions to database');
 
     // Save transactions
@@ -184,6 +195,24 @@ export class FundFileProcessor {
         averageFundsPerGoal: groupStats.averageFundsPerGroup.toFixed(2),
       },
     });
+
+    // Refresh materialized view for goal transactions
+    logger.info('=== STARTING MATERIALIZED VIEW REFRESH ===');
+    logger.info(`Batch ID: ${batchId}, Transaction count: ${transactions.length}`);
+    try {
+      logger.info('Calling GoalTransactionService.refreshMaterializedView()');
+      await GoalTransactionService.refreshMaterializedView();
+      logger.info('=== MATERIALIZED VIEW REFRESH COMPLETED SUCCESSFULLY ===');
+    } catch (error: any) {
+      // Log error but don't fail the upload - view can be refreshed manually
+      logger.error('=== MATERIALIZED VIEW REFRESH FAILED ===');
+      logger.error('Error details:', {
+        message: error.message,
+        stack: error.stack,
+        name: error.name
+      });
+      logger.warn('Upload completed but materialized view not refreshed - manual refresh may be needed');
+    }
 
     logger.info(`Processing completed successfully for batch ${batchId}`);
     logger.info(`  - Transactions saved: ${transactions.length}`);

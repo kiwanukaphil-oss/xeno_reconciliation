@@ -117,7 +117,9 @@ const FundUpload = () => {
 
     try {
       const result = await uploadFundFile(file);
-      console.log("Upload successful:", result);
+      console.log("=== UPLOAD RESPONSE ===", result);
+      console.log("Status received:", result.status);
+      console.log("Batch ID:", result.batchId);
 
       // Add to batches list
       const newBatch: BatchInfo = {
@@ -129,7 +131,14 @@ const FundUpload = () => {
         uploadedAt: new Date().toISOString(),
       };
 
-      setBatches((prev) => [newBatch, ...prev]);
+      console.log("=== NEW BATCH ADDED TO STATE ===", newBatch);
+      console.log("Processing status (uppercase):", newBatch.processingStatus);
+
+      setBatches((prev) => {
+        const updated = [newBatch, ...prev];
+        console.log("=== BATCHES STATE UPDATED ===", updated.length, "batches");
+        return updated;
+      });
     } catch (error) {
       console.error("Upload failed:", error);
       alert(`Upload failed: ${(error as Error).message}`);
@@ -164,12 +173,30 @@ const FundUpload = () => {
         )
     );
 
-    if (activeBatches.length === 0) return;
+    console.log("=== POLLING USEEFFECT TRIGGERED ===");
+    console.log("Total batches in state:", batches.length);
+    console.log("Active batches to poll:", activeBatches.length);
+    if (activeBatches.length > 0) {
+      console.log("Active batches:", activeBatches.map(b => ({
+        batchId: b.batchId.substring(0, 8) + "...",
+        fileName: b.fileName,
+        status: b.processingStatus
+      })));
+    }
 
+    if (activeBatches.length === 0) {
+      console.log("No active batches, polling will not start");
+      return;
+    }
+
+    console.log("Starting polling interval (every 2 seconds)");
     const interval = setInterval(async () => {
+      console.log("=== POLLING TICK ===");
       for (const batch of activeBatches) {
         try {
+          console.log(`Fetching status for batch ${batch.batchId.substring(0, 8)}... (current: ${batch.processingStatus})`);
           const status = await getBatchStatus(batch.batchId);
+          console.log(`Status received from API: ${status.processingStatus}`);
 
           // Check if status changed to WAITING_FOR_APPROVAL
           if (
@@ -177,11 +204,14 @@ const FundUpload = () => {
             batch.processingStatus !== "WAITING_FOR_APPROVAL" &&
             !shownApprovalDialogs.current.has(batch.batchId)
           ) {
+            console.log("=== STATUS CHANGED TO WAITING_FOR_APPROVAL ===");
+            console.log("Opening approval modal...");
             // Fetch approval data and show modal
             await handleShowApprovalModal(batch.batchId);
             shownApprovalDialogs.current.add(batch.batchId);
           }
 
+          console.log(`Updating batch ${batch.batchId.substring(0, 8)}... status to ${status.processingStatus}`);
           setBatches((prev) =>
             prev.map((b) =>
               b.batchId === batch.batchId
@@ -201,7 +231,10 @@ const FundUpload = () => {
       }
     }, 2000); // Poll every 2 seconds
 
-    return () => clearInterval(interval);
+    return () => {
+      console.log("Cleaning up polling interval");
+      clearInterval(interval);
+    };
   }, [batches]);
 
   const getStatusIcon = (status: string) => {

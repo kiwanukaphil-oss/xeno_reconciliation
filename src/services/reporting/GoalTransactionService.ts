@@ -39,7 +39,7 @@ export interface GoalTransactionSummary {
 
 export class GoalTransactionService {
   /**
-   * Gets goal transactions with aggregated fund amounts
+   * Gets goal transactions using materialized view for performance
    */
   static async getGoalTransactions(filters: {
     clientId?: string;
@@ -51,7 +51,117 @@ export class GoalTransactionService {
     limit?: number;
     offset?: number;
   }): Promise<GoalTransactionSummary[]> {
-    logger.info('Getting goal transactions with filters:', filters);
+    logger.info('Getting goal transactions from materialized view with filters:', filters);
+
+    // Build SQL where clauses
+    const whereClauses: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (filters.clientId) {
+      whereClauses.push(`"clientId" = $${paramIndex++}`);
+      params.push(filters.clientId);
+    }
+
+    if (filters.accountId) {
+      whereClauses.push(`"accountId" = $${paramIndex++}`);
+      params.push(filters.accountId);
+    }
+
+    if (filters.goalId) {
+      whereClauses.push(`"goalId" = $${paramIndex++}`);
+      params.push(filters.goalId);
+    }
+
+    if (filters.transactionType) {
+      whereClauses.push(`"transactionType" = $${paramIndex++}`);
+      params.push(filters.transactionType);
+    }
+
+    if (filters.startDate) {
+      whereClauses.push(`"transactionDate" >= $${paramIndex++}`);
+      params.push(filters.startDate);
+    }
+
+    if (filters.endDate) {
+      whereClauses.push(`"transactionDate" <= $${paramIndex++}`);
+      params.push(filters.endDate);
+    }
+
+    // Build query
+    const whereClause = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+    const limitClause = filters.limit ? `LIMIT $${paramIndex++}` : '';
+    const offsetClause = filters.offset ? `OFFSET $${paramIndex++}` : '';
+
+    if (filters.limit) params.push(filters.limit);
+    if (filters.offset) params.push(filters.offset);
+
+    const query = `
+      SELECT
+        "goalTransactionCode",
+        "transactionDate",
+        "transactionType",
+        "clientId",
+        "clientName",
+        "accountId",
+        "accountNumber",
+        "goalId",
+        "goalNumber",
+        "goalTitle",
+        "totalAmount",
+        "totalUnits",
+        COALESCE("XUMMF", 0) as "XUMMF",
+        COALESCE("XUBF", 0) as "XUBF",
+        COALESCE("XUDEF", 0) as "XUDEF",
+        COALESCE("XUREF", 0) as "XUREF",
+        "fundTransactionCount"
+      FROM goal_transactions_view
+      ${whereClause}
+      ORDER BY "transactionDate" DESC
+      ${limitClause}
+      ${offsetClause}
+    `;
+
+    // Execute query using Prisma's raw query
+    const results = await prisma.$queryRawUnsafe<any[]>(query, ...params);
+
+    // Transform to GoalTransactionSummary format
+    return results.map((row) => ({
+      goalTransactionCode: row.goalTransactionCode,
+      transactionDate: row.transactionDate,
+      clientName: row.clientName,
+      accountNumber: row.accountNumber,
+      goalTitle: row.goalTitle,
+      goalNumber: row.goalNumber,
+      transactionType: row.transactionType,
+      totalAmount: Number(row.totalAmount),
+      XUMMF: Number(row.XUMMF),
+      XUBF: Number(row.XUBF),
+      XUDEF: Number(row.XUDEF),
+      XUREF: Number(row.XUREF),
+      totalUnits: Number(row.totalUnits),
+      fundTransactionCount: Number(row.fundTransactionCount),
+      clientId: row.clientId,
+      accountId: row.accountId,
+      goalId: row.goalId,
+    }));
+  }
+
+  /**
+   * Gets goal transactions by computing on-the-fly (fallback method)
+   * Use this when materialized view is not available or needs refresh
+   */
+  static async getGoalTransactionsComputed(filters: {
+    clientId?: string;
+    accountId?: string;
+    goalId?: string;
+    startDate?: Date;
+    endDate?: Date;
+    transactionType?: string;
+    limit?: number;
+    offset?: number;
+  }): Promise<GoalTransactionSummary[]> {
+    logger.info('Computing goal transactions on-the-fly with filters:', filters);
 
     // Build where clause
     const where: any = {};
@@ -132,47 +242,57 @@ export class GoalTransactionService {
   }
 
   /**
-   * Gets a single goal transaction by code
+   * Gets a single goal transaction by code using materialized view
    */
   static async getGoalTransactionByCode(
     goalTransactionCode: string
   ): Promise<GoalTransactionSummary | null> {
-    const transactions = await prisma.fundTransaction.findMany({
-      where: { goalTransactionCode },
-      include: {
-        client: true,
-        account: true,
-        goal: true,
-        fund: true,
-      },
-    });
+    const query = `
+      SELECT
+        "goalTransactionCode",
+        "transactionDate",
+        "transactionType",
+        "clientId",
+        "clientName",
+        "accountId",
+        "accountNumber",
+        "goalId",
+        "goalNumber",
+        "goalTitle",
+        "totalAmount",
+        "totalUnits",
+        COALESCE("XUMMF", 0) as "XUMMF",
+        COALESCE("XUBF", 0) as "XUBF",
+        COALESCE("XUDEF", 0) as "XUDEF",
+        COALESCE("XUREF", 0) as "XUREF",
+        "fundTransactionCount"
+      FROM goal_transactions_view
+      WHERE "goalTransactionCode" = $1
+    `;
 
-    if (transactions.length === 0) return null;
+    const results = await prisma.$queryRawUnsafe<any[]>(query, goalTransactionCode);
 
-    const first = transactions[0];
+    if (results.length === 0) return null;
 
+    const row = results[0];
     return {
-      goalTransactionCode,
-      transactionDate: first.transactionDate,
-      clientName: first.client.clientName,
-      accountNumber: first.account.accountNumber,
-      goalTitle: first.goal.goalTitle,
-      goalNumber: first.goal.goalNumber,
-      transactionType: first.transactionType,
-      totalAmount: transactions
-        .reduce((sum, t) => sum.plus(t.amount), new Decimal(0))
-        .toNumber(),
-      XUMMF: this.getFundAmount(transactions, 'XUMMF'),
-      XUBF: this.getFundAmount(transactions, 'XUBF'),
-      XUDEF: this.getFundAmount(transactions, 'XUDEF'),
-      XUREF: this.getFundAmount(transactions, 'XUREF'),
-      totalUnits: transactions
-        .reduce((sum, t) => sum.plus(t.units), new Decimal(0))
-        .toNumber(),
-      fundTransactionCount: transactions.length,
-      clientId: first.clientId,
-      accountId: first.accountId,
-      goalId: first.goalId,
+      goalTransactionCode: row.goalTransactionCode,
+      transactionDate: row.transactionDate,
+      clientName: row.clientName,
+      accountNumber: row.accountNumber,
+      goalTitle: row.goalTitle,
+      goalNumber: row.goalNumber,
+      transactionType: row.transactionType,
+      totalAmount: Number(row.totalAmount),
+      XUMMF: Number(row.XUMMF),
+      XUBF: Number(row.XUBF),
+      XUDEF: Number(row.XUDEF),
+      XUREF: Number(row.XUREF),
+      totalUnits: Number(row.totalUnits),
+      fundTransactionCount: Number(row.fundTransactionCount),
+      clientId: row.clientId,
+      accountId: row.accountId,
+      goalId: row.goalId,
     };
   }
 
@@ -251,6 +371,30 @@ export class GoalTransactionService {
     const csv = [headers.join(','), ...rows.map((row) => row.join(','))].join('\n');
 
     return csv;
+  }
+
+  /**
+   * Refreshes the materialized view (call after bulk uploads)
+   * Uses CONCURRENTLY option to avoid locking the view during refresh
+   */
+  static async refreshMaterializedView(): Promise<void> {
+    logger.info('Refreshing goal transactions materialized view');
+
+    const startTime = Date.now();
+
+    try {
+      // Use REFRESH MATERIALIZED VIEW CONCURRENTLY to allow reads during refresh
+      // Note: CONCURRENTLY requires a unique index (which we have on goalTransactionCode)
+      await prisma.$executeRawUnsafe(`
+        REFRESH MATERIALIZED VIEW CONCURRENTLY goal_transactions_view
+      `);
+
+      const duration = Date.now() - startTime;
+      logger.info(`Goal transactions view refreshed successfully in ${duration}ms`);
+    } catch (error: any) {
+      logger.error('Failed to refresh goal transactions view:', error);
+      throw new Error(`Failed to refresh materialized view: ${error.message}`);
+    }
   }
 
   /**
