@@ -1,0 +1,422 @@
+// This is your Prisma schema file
+// Learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ============================================================================
+// CORE ENTITIES
+// ============================================================================
+
+model Client {
+  id         String   @id @default(uuid())
+  clientName String
+  clientCode String?  @unique
+  status     ClientStatus @default(ACTIVE)
+
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  // Relations
+  accounts         Account[]
+  fundTransactions FundTransaction[]
+
+  @@index([clientName])
+  @@index([status])
+  @@map("clients")
+}
+
+model Account {
+  id              String   @id @default(uuid())
+  clientId        String
+  accountNumber   String   @unique
+  accountType     AccountType
+  accountCategory AccountCategory
+  sponsorCode     String?  // Optional: for group/employer sponsored accounts
+  status          AccountStatus @default(ACTIVE)
+
+  openedAt        DateTime?
+  closedAt        DateTime?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  // Relations
+  client           Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  goals            Goal[]
+  fundTransactions FundTransaction[]
+
+  @@index([clientId])
+  @@index([accountNumber])
+  @@index([sponsorCode])
+  @@index([status])
+  @@map("accounts")
+}
+
+model Goal {
+  id               String   @id @default(uuid())
+  accountId        String
+  goalNumber       String   @unique
+  goalTitle        String
+  goalType         GoalType @default(OTHER)
+
+  targetAmount     Decimal? @db.Decimal(18, 2)
+  targetDate       DateTime?
+  riskTolerance    RiskTolerance @default(MODERATE)
+
+  // Fund distribution percentages (must sum to 100)
+  // Example: { "XUMMF": 40, "XUBF": 30, "XUDEF": 20, "XUREF": 10 }
+  fundDistribution Json
+
+  status           GoalStatus @default(ACTIVE)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  // Relations
+  account          Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  fundTransactions FundTransaction[]
+
+  @@index([accountId])
+  @@index([goalNumber])
+  @@index([status])
+  @@map("goals")
+}
+
+model Fund {
+  id           String   @id @default(uuid())
+  fundCode     String   @unique
+  fundName     String
+  fundType     FundType
+  currency     String   @default("UGX")
+  inceptionDate DateTime?
+  currentNAV   Decimal? @db.Decimal(18, 6)
+  status       FundStatus @default(ACTIVE)
+
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  // Relations
+  fundTransactions FundTransaction[]
+  fundPrices       FundPrice[]
+
+  @@index([fundCode])
+  @@index([status])
+  @@map("funds")
+}
+
+model FundPrice {
+  id         String   @id @default(uuid())
+  fundId     String
+  priceDate  DateTime @db.Date
+
+  bidPrice   Decimal  @db.Decimal(18, 6) // Buy-back price
+  offerPrice Decimal  @db.Decimal(18, 6) // Selling price
+  midPrice   Decimal  @db.Decimal(18, 6) // Average price
+  nav        Decimal? @db.Decimal(18, 6) // Net Asset Value
+
+  createdAt  DateTime @default(now())
+
+  // Relations
+  fund       Fund @relation(fields: [fundId], references: [id], onDelete: Cascade)
+
+  @@unique([fundId, priceDate])
+  @@index([priceDate])
+  @@map("fund_prices")
+}
+
+// ============================================================================
+// FUND TRANSACTIONS (Core transaction table)
+// ============================================================================
+
+model FundTransaction {
+  id                   String   @id @default(uuid())
+
+  // *** DEDUPLICATION FIELD ***
+  // External unique identifier from source system to prevent duplicate uploads
+  fundTransactionId    String   @unique
+
+  // *** CRITICAL LINKING FIELD ***
+  // Links related fund transactions belonging to same goal transaction
+  // Format: {YYYY-MM-DD}-{accountNumber}-{goalNumber}
+  // Example: "2018-07-24-701-555863519-701-5558635193a"
+  goalTransactionCode  String
+
+  // Foreign Keys
+  clientId             String
+  accountId            String
+  goalId               String
+  fundId               String
+  uploadBatchId        String
+
+  // Transaction Details
+  transactionDate      DateTime @db.Date
+  dateCreated          DateTime // System creation/processing date
+  transactionType      TransactionType
+
+  // Unit Trust Details
+  amount               Decimal  @db.Decimal(18, 2) // Amount in currency
+  units                Decimal  @db.Decimal(18, 6) // Units issued/redeemed
+  bidPrice             Decimal  @db.Decimal(18, 6)
+  offerPrice           Decimal  @db.Decimal(18, 6)
+  midPrice             Decimal  @db.Decimal(18, 6)
+  priceDate            DateTime @db.Date
+
+  // Additional Fields
+  reference            String?
+  notes                String?
+
+  // Audit Fields
+  rowNumber            Int      // Original CSV row number
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+
+  // Relations
+  client               Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  account              Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  goal                 Goal @relation(fields: [goalId], references: [id], onDelete: Restrict)
+  fund                 Fund @relation(fields: [fundId], references: [id], onDelete: Restrict)
+  uploadBatch          UploadBatch @relation(fields: [uploadBatchId], references: [id], onDelete: Restrict)
+
+  @@unique([uploadBatchId, rowNumber]) // Prevent duplicate rows from same upload
+  @@index([fundTransactionId]) // For deduplication checks
+  @@index([goalTransactionCode]) // Critical for grouping
+  @@index([transactionDate])
+  @@index([clientId])
+  @@index([accountId])
+  @@index([goalId])
+  @@index([fundId])
+  @@index([transactionType])
+  @@index([transactionDate, accountId, goalId]) // Composite index for common queries
+  @@map("fund_transactions")
+}
+
+// ============================================================================
+// UPLOAD BATCH MANAGEMENT
+// ============================================================================
+
+model UploadBatch {
+  id                  String   @id @default(uuid())
+  batchNumber         String   @unique // Auto-generated: BATCH-YYYYMMDD-XXXXX
+  fileName            String
+  fileSize            BigInt
+  filePath            String
+
+  // Processing Status
+  processingStatus    ProcessingStatus @default(QUEUED)
+  validationStatus    ValidationStatus @default(PENDING)
+
+  // Statistics
+  totalRecords        Int      @default(0)
+  processedRecords    Int      @default(0)
+  failedRecords       Int      @default(0)
+
+  // New Entity Detection
+  newClientsDetected  Int      @default(0)
+  newAccountsDetected Int      @default(0)
+  newGoalsDetected    Int      @default(0)
+  newEntitiesReport   Json?    // List of new entities for approval
+  newEntitiesStatus   EntityApprovalStatus?
+
+  // Financial Summary
+  totalDepositAmount     Decimal @default(0) @db.Decimal(18, 2)
+  totalWithdrawalAmount  Decimal @default(0) @db.Decimal(18, 2)
+  totalUnitsIssued       Decimal @default(0) @db.Decimal(18, 6)
+  totalUnitsRedeemed     Decimal @default(0) @db.Decimal(18, 6)
+
+  // Fund breakdown: { XUMMF: { transactions, amount, units }, ... }
+  fundBreakdown       Json?
+
+  // Goal transaction statistics
+  totalGoalTransactions      Int @default(0)
+  completeGoalTransactions   Int @default(0) // Goal transactions with all 4 funds
+  incompleteGoalTransactions Int @default(0)
+
+  // Validation Results
+  validationErrors    Json?    // Array of error objects
+  validationWarnings  Json?    // Array of warning objects
+
+  // Timestamps
+  uploadedAt          DateTime @default(now())
+  processingStartedAt DateTime?
+  processingCompletedAt DateTime?
+
+  // User Tracking
+  uploadedBy          String
+  approvedBy          String?
+  approvedAt          DateTime?
+
+  // Metadata: { period, source, notes, etc. }
+  metadata            Json?
+
+  // Relations
+  fundTransactions    FundTransaction[]
+  invalidRecords      InvalidFundTransaction[]
+
+  @@index([processingStatus])
+  @@index([validationStatus])
+  @@index([uploadedAt])
+  @@index([uploadedBy])
+  @@map("upload_batches")
+}
+
+model InvalidFundTransaction {
+  id              String   @id @default(uuid())
+  uploadBatchId   String
+
+  rowNumber       Int
+  rawData         Json     // Original CSV row data
+  validationErrors Json    // Array of validation error objects
+
+  createdAt       DateTime @default(now())
+
+  // Relations
+  uploadBatch     UploadBatch @relation(fields: [uploadBatchId], references: [id], onDelete: Cascade)
+
+  @@index([uploadBatchId])
+  @@map("invalid_fund_transactions")
+}
+
+// ============================================================================
+// VALIDATION CONFIGURATION
+// ============================================================================
+
+model ValidationRule {
+  id                String   @id @default(uuid())
+  ruleName          String   @unique
+  ruleType          ValidationRuleType
+  isActive          Boolean  @default(true)
+  severity          ValidationSeverity
+
+  // Rule-specific configuration (JSON)
+  // Example: { "minValue": 1000, "maxValue": 1000000000 }
+  configuration     Json
+
+  errorMessage      String
+  suggestedAction   String?
+
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([ruleType])
+  @@index([isActive])
+  @@map("validation_rules")
+}
+
+// ============================================================================
+// ENUMS
+// ============================================================================
+
+enum ClientStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+}
+
+enum AccountType {
+  PERSONAL
+  CORPORATE
+  JOINT
+}
+
+enum AccountCategory {
+  GENERAL
+  RETIREMENT
+  EDUCATION
+  TRUST
+}
+
+enum AccountStatus {
+  ACTIVE
+  CLOSED
+  SUSPENDED
+}
+
+enum GoalType {
+  EDUCATION
+  RETIREMENT
+  WEALTH
+  EMERGENCY
+  OTHER
+}
+
+enum RiskTolerance {
+  CONSERVATIVE
+  MODERATE
+  BALANCED
+  AGGRESSIVE
+}
+
+enum GoalStatus {
+  ACTIVE
+  COMPLETED
+  SUSPENDED
+  CANCELED
+}
+
+enum FundType {
+  EQUITY
+  BOND
+  MONEY_MARKET
+  BALANCED
+}
+
+enum FundStatus {
+  ACTIVE
+  CLOSED
+  SUSPENDED
+}
+
+enum TransactionType {
+  DEPOSIT
+  WITHDRAWAL
+  REDEMPTION
+  SWITCH
+  DIVIDEND
+  TRANSFER
+}
+
+enum ProcessingStatus {
+  QUEUED
+  PARSING
+  VALIDATING
+  PROCESSING
+  WAITING_FOR_APPROVAL
+  COMPLETED
+  FAILED
+  CANCELED
+}
+
+enum ValidationStatus {
+  PENDING
+  PASSED
+  FAILED
+  WARNING
+}
+
+enum EntityApprovalStatus {
+  PENDING
+  APPROVED
+  REJECTED
+}
+
+enum ValidationRuleType {
+  REQUIRED_FIELD
+  DATE_VALIDATION
+  AMOUNT_VALIDATION
+  UNITS_VALIDATION
+  PRICE_VALIDATION
+  BUSINESS_RULE
+  GOAL_TRANSACTION_CONSISTENCY
+  FUND_DISTRIBUTION
+}
+
+enum ValidationSeverity {
+  CRITICAL
+  WARNING
+  INFO
+}

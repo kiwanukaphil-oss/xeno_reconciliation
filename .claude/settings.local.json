@@ -1,0 +1,43 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(dir:*)",
+      "Bash(find:*)",
+      "Bash($env:PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=\"1\")",
+      "Bash(npm run prisma:generate:*)",
+      "Bash(PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 npm run prisma:generate:*)",
+      "Bash(npm install:*)",
+      "Bash(PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 npx prisma generate:*)",
+      "Bash(PRISMA_BINARIES_MIRROR=https://github.com/prisma/prisma-engines/releases/latest/download PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1 npm run prisma:generate:*)",
+      "Bash(npx prisma:*)",
+      "Bash(curl:*)",
+      "Bash(cp:*)",
+      "Bash(psql:*)",
+      "Bash(redis-cli:*)",
+      "Bash(redis-server:*)",
+      "Bash(docker ps:*)",
+      "Bash(docker exec:*)",
+      "Bash(PGPASSWORD='Pkiwan01!' psql:*)",
+      "Bash(npm run prisma:migrate:*)",
+      "Bash(npm run prisma:seed:*)",
+      "Bash(npm run build:*)",
+      "Bash(npm run dev:*)",
+      "Bash(npm run worker:*)",
+      "Bash(npm create:*)",
+      "Bash(node -e:*)",
+      "Bash(npx ts-node:*)",
+      "Bash(netstat:*)",
+      "Bash(findstr:*)",
+      "Bash(taskkill:*)",
+      "Bash(powershell -Command \"Stop-Process -Id 51360 -Force\")",
+      "Bash(batch_summary.json)",
+      "Bash(node parse_errors.js:*)",
+      "Bash(rimraf:*)",
+      "Bash(rd /s /q dist)",
+      "Bash(git init:*)",
+      "Bash(git add:*)"
+    ],
+    "deny": [],
+    "ask": []
+  }
+}
