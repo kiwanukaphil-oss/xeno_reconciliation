@@ -1,4 +1,3 @@
-import React from "react";
 import { CheckSquare } from "lucide-react";
 
 const ApprovalQueue = () => {

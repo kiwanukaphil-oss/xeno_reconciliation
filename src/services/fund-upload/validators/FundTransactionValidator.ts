@@ -313,6 +313,47 @@ export class FundTransactionValidator {
     const errors: TransactionValidationError[] = [];
     const rowNumber = transaction.rowNumber;
 
+    // Check for missing required prices based on transaction type
+    if (
+      transaction.transactionType === 'DEPOSIT' &&
+      (transaction.offerPrice === null || transaction.offerPrice === undefined)
+    ) {
+      errors.push({
+        rowNumber,
+        field: 'offerPrice',
+        errorCode: 'REQUIRED_OFFER_PRICE',
+        message: 'Offer price is required for DEPOSIT transactions',
+        severity: 'CRITICAL',
+        suggestedAction: 'Ensure offerPrice is provided for deposit transactions',
+      });
+    }
+
+    if (
+      transaction.transactionType === 'WITHDRAWAL' &&
+      (transaction.bidPrice === null || transaction.bidPrice === undefined)
+    ) {
+      errors.push({
+        rowNumber,
+        field: 'bidPrice',
+        errorCode: 'REQUIRED_BID_PRICE',
+        message: 'Bid price is required for WITHDRAWAL transactions',
+        severity: 'CRITICAL',
+        suggestedAction: 'Ensure bidPrice is provided for withdrawal transactions',
+      });
+    }
+
+    // Warning for missing midPrice (may not be critical but affects data quality)
+    if (transaction.midPrice === null || transaction.midPrice === undefined) {
+      errors.push({
+        rowNumber,
+        field: 'midPrice',
+        errorCode: 'MISSING_MID_PRICE',
+        message: 'Mid price is missing',
+        severity: 'WARNING',
+        suggestedAction: 'Consider providing midPrice for complete transaction data',
+      });
+    }
+
     // Check if all prices are positive (WARNING - data quality check)
     if (
       transaction.bidPrice !== null &&

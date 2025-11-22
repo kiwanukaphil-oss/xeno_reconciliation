@@ -14,9 +14,8 @@ export interface GoalTransactionSummary {
   accountNumber: string;
   goalTitle: string;
   goalNumber: string;
-  transactionType: string;
 
-  // Total amount across all funds
+  // Total amount across all funds (NET of deposits and withdrawals)
   totalAmount: number;
 
   // Individual fund amounts
@@ -28,8 +27,11 @@ export interface GoalTransactionSummary {
   // Total units across all funds
   totalUnits: number;
 
-  // Fund transaction count
+  // Fund transaction count and breakdown
   fundTransactionCount: number;
+  depositCount: number;
+  withdrawalCount: number;
+  transactionTypes: string; // Comma-separated list of transaction types
 
   // Related IDs
   clientId: string;
@@ -48,6 +50,7 @@ export class GoalTransactionService {
     startDate?: Date;
     endDate?: Date;
     transactionType?: string;
+    search?: string;
     limit?: number;
     offset?: number;
   }): Promise<GoalTransactionSummary[]> {
@@ -79,13 +82,27 @@ export class GoalTransactionService {
     }
 
     if (filters.startDate) {
-      whereClauses.push(`"transactionDate" >= $${paramIndex++}`);
+      whereClauses.push(`"transactionDate"::date >= $${paramIndex++}::date`);
       params.push(filters.startDate);
     }
 
     if (filters.endDate) {
-      whereClauses.push(`"transactionDate" <= $${paramIndex++}`);
+      whereClauses.push(`"transactionDate"::date <= $${paramIndex++}::date`);
       params.push(filters.endDate);
+    }
+
+    // Add search functionality across multiple fields
+    if (filters.search) {
+      const searchPattern = `%${filters.search}%`;
+      whereClauses.push(`(
+        "clientName" ILIKE $${paramIndex} OR
+        "accountNumber" ILIKE $${paramIndex} OR
+        "goalTitle" ILIKE $${paramIndex} OR
+        "goalNumber" ILIKE $${paramIndex} OR
+        "goalTransactionCode" ILIKE $${paramIndex}
+      )`);
+      params.push(searchPattern);
+      paramIndex++;
     }
 
     // Build query
@@ -100,7 +117,6 @@ export class GoalTransactionService {
       SELECT
         "goalTransactionCode",
         "transactionDate",
-        "transactionType",
         "clientId",
         "clientName",
         "accountId",
@@ -114,7 +130,10 @@ export class GoalTransactionService {
         COALESCE("XUBF", 0) as "XUBF",
         COALESCE("XUDEF", 0) as "XUDEF",
         COALESCE("XUREF", 0) as "XUREF",
-        "fundTransactionCount"
+        "fundTransactionCount",
+        COALESCE("depositCount", 0) as "depositCount",
+        COALESCE("withdrawalCount", 0) as "withdrawalCount",
+        COALESCE("transactionTypes", '') as "transactionTypes"
       FROM goal_transactions_view
       ${whereClause}
       ORDER BY "transactionDate" DESC
@@ -133,7 +152,6 @@ export class GoalTransactionService {
       accountNumber: row.accountNumber,
       goalTitle: row.goalTitle,
       goalNumber: row.goalNumber,
-      transactionType: row.transactionType,
       totalAmount: Number(row.totalAmount),
       XUMMF: Number(row.XUMMF),
       XUBF: Number(row.XUBF),
@@ -141,6 +159,9 @@ export class GoalTransactionService {
       XUREF: Number(row.XUREF),
       totalUnits: Number(row.totalUnits),
       fundTransactionCount: Number(row.fundTransactionCount),
+      depositCount: Number(row.depositCount),
+      withdrawalCount: Number(row.withdrawalCount),
+      transactionTypes: row.transactionTypes,
       clientId: row.clientId,
       accountId: row.accountId,
       goalId: row.goalId,
@@ -209,9 +230,8 @@ export class GoalTransactionService {
         accountNumber: first.account.accountNumber,
         goalTitle: first.goal.goalTitle,
         goalNumber: first.goal.goalNumber,
-        transactionType: first.transactionType,
 
-        // Calculate total amount
+        // Calculate total amount (NET)
         totalAmount: transactions
           .reduce((sum, t) => sum.plus(t.amount), new Decimal(0))
           .toNumber(),
@@ -228,6 +248,9 @@ export class GoalTransactionService {
           .toNumber(),
 
         fundTransactionCount: transactions.length,
+        depositCount: transactions.filter(t => t.transactionType === 'DEPOSIT').length,
+        withdrawalCount: transactions.filter(t => t.transactionType === 'WITHDRAWAL').length,
+        transactionTypes: [...new Set(transactions.map(t => t.transactionType))].join(','),
 
         // IDs
         clientId: first.clientId,
@@ -251,7 +274,6 @@ export class GoalTransactionService {
       SELECT
         "goalTransactionCode",
         "transactionDate",
-        "transactionType",
         "clientId",
         "clientName",
         "accountId",
@@ -265,7 +287,10 @@ export class GoalTransactionService {
         COALESCE("XUBF", 0) as "XUBF",
         COALESCE("XUDEF", 0) as "XUDEF",
         COALESCE("XUREF", 0) as "XUREF",
-        "fundTransactionCount"
+        "fundTransactionCount",
+        COALESCE("depositCount", 0) as "depositCount",
+        COALESCE("withdrawalCount", 0) as "withdrawalCount",
+        COALESCE("transactionTypes", '') as "transactionTypes"
       FROM goal_transactions_view
       WHERE "goalTransactionCode" = $1
     `;
@@ -282,7 +307,6 @@ export class GoalTransactionService {
       accountNumber: row.accountNumber,
       goalTitle: row.goalTitle,
       goalNumber: row.goalNumber,
-      transactionType: row.transactionType,
       totalAmount: Number(row.totalAmount),
       XUMMF: Number(row.XUMMF),
       XUBF: Number(row.XUBF),
@@ -290,6 +314,9 @@ export class GoalTransactionService {
       XUREF: Number(row.XUREF),
       totalUnits: Number(row.totalUnits),
       fundTransactionCount: Number(row.fundTransactionCount),
+      depositCount: Number(row.depositCount || 0),
+      withdrawalCount: Number(row.withdrawalCount || 0),
+      transactionTypes: row.transactionTypes || '',
       clientId: row.clientId,
       accountId: row.accountId,
       goalId: row.goalId,
@@ -328,6 +355,101 @@ export class GoalTransactionService {
   }
 
   /**
+   * Gets aggregate statistics for filtered goal transactions
+   */
+  static async getAggregates(filters: {
+    clientId?: string;
+    accountId?: string;
+    goalId?: string;
+    startDate?: Date;
+    endDate?: Date;
+    transactionType?: string;
+    search?: string;
+  }): Promise<{
+    totalCount: number;
+    totalAmount: number;
+    totalXUMMF: number;
+    totalXUBF: number;
+    totalXUDEF: number;
+    totalXUREF: number;
+  }> {
+    // Build SQL where clauses (same as getGoalTransactions)
+    const whereClauses: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (filters.clientId) {
+      whereClauses.push(`"clientId" = $${paramIndex++}`);
+      params.push(filters.clientId);
+    }
+
+    if (filters.accountId) {
+      whereClauses.push(`"accountId" = $${paramIndex++}`);
+      params.push(filters.accountId);
+    }
+
+    if (filters.goalId) {
+      whereClauses.push(`"goalId" = $${paramIndex++}`);
+      params.push(filters.goalId);
+    }
+
+    if (filters.transactionType) {
+      whereClauses.push(`"transactionType" = $${paramIndex++}`);
+      params.push(filters.transactionType);
+    }
+
+    if (filters.startDate) {
+      whereClauses.push(`"transactionDate"::date >= $${paramIndex++}::date`);
+      params.push(filters.startDate);
+    }
+
+    if (filters.endDate) {
+      whereClauses.push(`"transactionDate"::date <= $${paramIndex++}::date`);
+      params.push(filters.endDate);
+    }
+
+    // Add search functionality across multiple fields
+    if (filters.search) {
+      const searchPattern = `%${filters.search}%`;
+      whereClauses.push(`(
+        "clientName" ILIKE $${paramIndex} OR
+        "accountNumber" ILIKE $${paramIndex} OR
+        "goalTitle" ILIKE $${paramIndex} OR
+        "goalNumber" ILIKE $${paramIndex} OR
+        "goalTransactionCode" ILIKE $${paramIndex}
+      )`);
+      params.push(searchPattern);
+      paramIndex++;
+    }
+
+    const whereClause = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';
+
+    const query = `
+      SELECT
+        COUNT(*) as "totalCount",
+        COALESCE(SUM("totalAmount"), 0) as "totalAmount",
+        COALESCE(SUM("XUMMF"), 0) as "totalXUMMF",
+        COALESCE(SUM("XUBF"), 0) as "totalXUBF",
+        COALESCE(SUM("XUDEF"), 0) as "totalXUDEF",
+        COALESCE(SUM("XUREF"), 0) as "totalXUREF"
+      FROM goal_transactions_view
+      ${whereClause}
+    `;
+
+    const results = await prisma.$queryRawUnsafe<any[]>(query, ...params);
+    const row = results[0];
+
+    return {
+      totalCount: Number(row.totalCount),
+      totalAmount: Number(row.totalAmount),
+      totalXUMMF: Number(row.totalXUMMF),
+      totalXUBF: Number(row.totalXUBF),
+      totalXUDEF: Number(row.totalXUDEF),
+      totalXUREF: Number(row.totalXUREF),
+    };
+  }
+
+  /**
    * Exports goal transactions to CSV format (matching reference file)
    */
   static async exportGoalTransactionsCSV(filters: {
@@ -336,6 +458,7 @@ export class GoalTransactionService {
     goalId?: string;
     startDate?: Date;
     endDate?: Date;
+    search?: string;
   }): Promise<string> {
     const goalTransactions = await this.getGoalTransactions(filters);
 
@@ -406,6 +529,7 @@ export class GoalTransactionService {
     goalId?: string;
     startDate?: Date;
     endDate?: Date;
+    search?: string;
   }): Promise<{
     totalGoalTransactions: number;
     totalAmount: number;

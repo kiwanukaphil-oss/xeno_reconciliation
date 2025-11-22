@@ -10,6 +10,10 @@ const router = express.Router();
  */
 router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
+    const page = req.query.page ? parseInt(req.query.page as string) : 1;
+    const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
+    const offset = (page - 1) * limit;
+
     const filters = {
       clientId: req.query.clientId as string,
       accountId: req.query.accountId as string,
@@ -17,15 +21,31 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       startDate: req.query.startDate ? new Date(req.query.startDate as string) : undefined,
       endDate: req.query.endDate ? new Date(req.query.endDate as string) : undefined,
       transactionType: req.query.transactionType as string,
-      limit: req.query.limit ? parseInt(req.query.limit as string) : 100,
-      offset: req.query.offset ? parseInt(req.query.offset as string) : 0,
+      search: req.query.search as string,
     };
 
-    const goalTransactions = await GoalTransactionService.getGoalTransactions(filters);
+    // Get paginated data and total aggregates in parallel
+    const [goalTransactions, aggregates] = await Promise.all([
+      GoalTransactionService.getGoalTransactions({ ...filters, limit, offset }),
+      GoalTransactionService.getAggregates(filters),
+    ]);
 
     res.json({
-      count: goalTransactions.length,
       data: goalTransactions,
+      pagination: {
+        page,
+        limit,
+        total: aggregates.totalCount,
+        totalPages: Math.ceil(aggregates.totalCount / limit),
+      },
+      aggregates: {
+        totalCount: aggregates.totalCount,
+        totalAmount: aggregates.totalAmount,
+        totalXUMMF: aggregates.totalXUMMF,
+        totalXUBF: aggregates.totalXUBF,
+        totalXUDEF: aggregates.totalXUDEF,
+        totalXUREF: aggregates.totalXUREF,
+      },
     });
   } catch (error) {
     next(error);
@@ -91,6 +111,7 @@ router.get('/export/csv', async (req: Request, res: Response, next: NextFunction
       goalId: req.query.goalId as string,
       startDate: req.query.startDate ? new Date(req.query.startDate as string) : undefined,
       endDate: req.query.endDate ? new Date(req.query.endDate as string) : undefined,
+      search: req.query.search as string,
     };
 
     const csv = await GoalTransactionService.exportGoalTransactionsCSV(filters);
@@ -115,6 +136,7 @@ router.get('/stats', async (req: Request, res: Response, next: NextFunction) => 
       goalId: req.query.goalId as string,
       startDate: req.query.startDate ? new Date(req.query.startDate as string) : undefined,
       endDate: req.query.endDate ? new Date(req.query.endDate as string) : undefined,
+      search: req.query.search as string,
     };
 
     const stats = await GoalTransactionService.getStatistics(filters);

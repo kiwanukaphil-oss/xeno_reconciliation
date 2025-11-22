@@ -5,7 +5,6 @@ CREATE MATERIALIZED VIEW goal_transactions_view AS
 SELECT
   ft."goalTransactionCode" AS "goalTransactionCode",
   ft."transactionDate" AS "transactionDate",
-  ft."transactionType" AS "transactionType",
 
   -- Client info
   c.id AS "clientId",
@@ -20,20 +19,23 @@ SELECT
   g."goalNumber" AS "goalNumber",
   g."goalTitle" AS "goalTitle",
 
-  -- Total amount across all funds
+  -- Aggregated amounts (NET of all transaction types for reconciliation)
   SUM(ft.amount) AS "totalAmount",
-
-  -- Total units across all funds
   SUM(ft.units) AS "totalUnits",
 
-  -- Individual fund amounts (using FILTER for conditional aggregation)
+  -- Individual fund amounts
   SUM(ft.amount) FILTER (WHERE f."fundCode" = 'XUMMF') AS "XUMMF",
   SUM(ft.amount) FILTER (WHERE f."fundCode" = 'XUBF') AS "XUBF",
   SUM(ft.amount) FILTER (WHERE f."fundCode" = 'XUDEF') AS "XUDEF",
   SUM(ft.amount) FILTER (WHERE f."fundCode" = 'XUREF') AS "XUREF",
 
-  -- Fund transaction count
+  -- Transaction counts by type (for analysis)
   COUNT(*) AS "fundTransactionCount",
+  COUNT(*) FILTER (WHERE ft."transactionType" = 'DEPOSIT') AS "depositCount",
+  COUNT(*) FILTER (WHERE ft."transactionType" = 'WITHDRAWAL') AS "withdrawalCount",
+
+  -- List all transaction types present (for reference)
+  STRING_AGG(DISTINCT ft."transactionType"::text, ',') AS "transactionTypes",
 
   -- Last updated timestamp for cache management
   MAX(ft."createdAt") AS "lastUpdated"
@@ -47,7 +49,6 @@ INNER JOIN funds f ON ft."fundId" = f.id
 GROUP BY
   ft."goalTransactionCode",
   ft."transactionDate",
-  ft."transactionType",
   c.id,
   c."clientName",
   a.id,
@@ -59,8 +60,8 @@ GROUP BY
 WITH DATA;
 
 -- Create indexes for optimal query performance
--- Primary index on goalTransactionCode for lookups
-CREATE UNIQUE INDEX idx_goal_tx_view_code ON goal_transactions_view("goalTransactionCode");
+-- Index on goalTransactionCode for lookups (non-unique to allow multiple transactions per day)
+CREATE INDEX idx_goal_tx_view_code ON goal_transactions_view("goalTransactionCode");
 
 -- Index on transaction date for date range queries (biggest query = 1 year)
 CREATE INDEX idx_goal_tx_view_date ON goal_transactions_view("transactionDate" DESC);

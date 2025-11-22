@@ -48,6 +48,8 @@ const worker = new Worker(
       max: 10, // Max 10 jobs
       duration: 1000, // Per 1 second
     },
+    lockDuration: 300000, // 5 minutes lock duration for long-running file processing
+    lockRenewTime: 150000, // Renew lock every 2.5 minutes
   }
 );
 

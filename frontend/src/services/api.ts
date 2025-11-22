@@ -60,6 +60,13 @@ export const cancelBatch = async (batchId: string) => {
   return handleResponse(response);
 };
 
+export const rollbackBatch = async (batchId: string) => {
+  const response = await fetch(`${API_URL}/api/fund-upload/batches/${batchId}/rollback`, {
+    method: "DELETE",
+  });
+  return handleResponse(response);
+};
+
 export const getAllBatches = async (page: number = 1, limit: number = 20) => {
   const response = await fetch(`${API_URL}/api/fund-upload/batches?page=${page}&limit=${limit}`);
   return handleResponse(response);

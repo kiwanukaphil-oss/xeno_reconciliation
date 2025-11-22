@@ -1,6 +1,7 @@
 import { prisma } from '../../../config/database';
 import { logger } from '../../../config/logger';
 import { NewEntitiesReport } from '../../../types/fundTransaction';
+import { AccountType, AccountCategory } from '@prisma/client';
 
 /**
  * Creates approved clients, accounts, and goals in the database
@@ -61,8 +62,8 @@ export class EntityCreator {
           data: {
             clientId: client.id,
             accountNumber: accountInfo.accountNumber,
-            accountType: accountInfo.accountType as any,
-            accountCategory: accountInfo.accountCategory as any,
+            accountType: accountInfo.accountType as AccountType,
+            accountCategory: accountInfo.accountCategory as AccountCategory,
             sponsorCode: accountInfo.sponsorCode || null,
             status: 'ACTIVE',
             openedAt: new Date(),
@@ -145,15 +146,15 @@ export class EntityCreator {
   static async createAccount(
     clientId: string,
     accountNumber: string,
-    accountType: string,
-    accountCategory: string
+    accountType: AccountType,
+    accountCategory: AccountCategory
   ): Promise<string> {
     const account = await prisma.account.create({
       data: {
         clientId,
         accountNumber,
-        accountType: accountType as any,
-        accountCategory: accountCategory as any,
+        accountType,
+        accountCategory,
         status: 'ACTIVE',
         openedAt: new Date(),
       },

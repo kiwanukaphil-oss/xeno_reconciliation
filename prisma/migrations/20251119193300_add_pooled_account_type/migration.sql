@@ -1,0 +1,3 @@
+-- Add POOLED and LINKED to AccountType enum
+ALTER TYPE "AccountType" ADD VALUE IF NOT EXISTS 'POOLED';
+ALTER TYPE "AccountType" ADD VALUE IF NOT EXISTS 'LINKED';

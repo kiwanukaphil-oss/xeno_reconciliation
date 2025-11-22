@@ -29,9 +29,19 @@ export class ExcelParser {
       const worksheet = workbook.Sheets[sheetName];
 
       // Convert to JSON with header row
-      const rawData: any[] = XLSX.utils.sheet_to_json(worksheet, {
+      let rawData: any[] = XLSX.utils.sheet_to_json(worksheet, {
         raw: false, // Keep as strings for custom parsing
         defval: '', // Default value for empty cells
+      });
+
+      // Normalize column headers (trim whitespace) to handle files with spaces in headers
+      rawData = rawData.map((row) => {
+        const normalizedRow: any = {};
+        Object.keys(row).forEach((key) => {
+          const trimmedKey = key.trim();
+          normalizedRow[trimmedKey] = row[key];
+        });
+        return normalizedRow;
       });
 
       logger.info(`Excel file has ${rawData.length} rows`);

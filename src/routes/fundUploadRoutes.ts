@@ -6,6 +6,7 @@ import { fundProcessingQueue, JobNames } from '../config/queue';
 import { UploadBatchManager } from '../services/fund-upload/database/UploadBatchManager';
 import { FundTransactionRepository } from '../services/fund-upload/database/FundTransactionRepository';
 import { FundFileProcessor } from '../services/fund-upload/FundFileProcessor';
+import { BatchRollbackService } from '../services/fund-upload/database/BatchRollbackService';
 
 const router = express.Router();
 
@@ -296,6 +297,45 @@ router.post('/batches/:batchId/cancel', async (req: Request, res: Response, next
     res.json({
       message: 'Batch canceled successfully',
       batchId,
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * Rollback an upload batch - delete batch and all associated data
+ * DELETE /api/fund-upload/batches/:batchId/rollback
+ */
+router.delete('/batches/:batchId/rollback', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { batchId } = req.params;
+
+    // Check if batch exists and can be rolled back
+    const eligibility = await BatchRollbackService.canRollback(batchId);
+    if (!eligibility.canRollback) {
+      throw new AppError(400, eligibility.reason || 'Cannot rollback this batch');
+    }
+
+    // Remove job from queue if exists
+    const job = await fundProcessingQueue.getJob(batchId);
+    if (job) {
+      await job.remove();
+    }
+
+    // Also try to remove resume job if exists
+    const resumeJob = await fundProcessingQueue.getJob(`${batchId}-resume`);
+    if (resumeJob) {
+      await resumeJob.remove();
+    }
+
+    // Perform rollback
+    const result = await BatchRollbackService.rollbackBatch(batchId);
+
+    res.json({
+      success: true,
+      message: result.message,
+      deletedCounts: result.deletedCounts,
     });
   } catch (error) {
     next(error);

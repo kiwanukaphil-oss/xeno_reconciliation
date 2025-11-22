@@ -321,6 +321,9 @@ enum AccountType {
   PERSONAL
   CORPORATE
   JOINT
+  POOLED
+  LINKED
+  SPONSOR
 }
 
 enum AccountCategory {
@@ -328,6 +331,10 @@ enum AccountCategory {
   RETIREMENT
   EDUCATION
   TRUST
+  INVESTMENT_CLUBS
+  RETIREMENTS_BENEFIT_SCHEME
+  FAMILY
+  SACCO
 }
 
 enum AccountStatus {

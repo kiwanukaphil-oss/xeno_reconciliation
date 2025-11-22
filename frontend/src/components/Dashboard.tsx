@@ -1,4 +1,3 @@
-import React from "react";
 import { TrendingUp, Upload, CheckCircle, AlertCircle } from "lucide-react";
 
 const Dashboard = () => {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from "react";
-import { Upload, FileText, Loader2, Download, CheckCircle, XCircle, Clock, AlertCircle } from "lucide-react";
-import { uploadFundFile, downloadTemplate, getBatchStatus, getAllBatches, getBatchSummary, getNewEntities, approveEntities, cancelBatch } from "../../services/api";
+import { Upload, FileText, Loader2, Download, CheckCircle, XCircle, Clock, AlertCircle, Trash2 } from "lucide-react";
+import { uploadFundFile, downloadTemplate, getBatchStatus, getAllBatches, getBatchSummary, getNewEntities, approveEntities, cancelBatch, rollbackBatch } from "../../services/api";
 
 interface BatchInfo {
   batchId: string;
@@ -78,6 +78,7 @@ const FundUpload = () => {
       setBatches(formattedBatches);
     } catch (error) {
       console.error("Failed to fetch batches:", error);
+      alert(`Failed to load upload history: ${(error as Error).message}`);
     } finally {
       setLoading(false);
     }
@@ -357,6 +358,42 @@ const FundUpload = () => {
     }
   };
 
+  // Handle rollback/delete batch
+  const handleRollbackBatch = async (batchId: string, fileName: string) => {
+    const confirmMessage =
+      `Are you sure you want to delete this batch?\n\n` +
+      `File: ${fileName}\n\n` +
+      `This will permanently delete:\n` +
+      `- All fund transactions from this batch\n` +
+      `- Any goals, accounts, and clients that have no other transactions\n\n` +
+      `This action cannot be undone.`;
+
+    if (!confirm(confirmMessage)) {
+      return;
+    }
+
+    try {
+      const result = await rollbackBatch(batchId);
+
+      // Show success message with details
+      const message =
+        `Batch deleted successfully!\n\n` +
+        `Deleted:\n` +
+        `- ${result.deletedCounts.fundTransactions} fund transactions\n` +
+        `- ${result.deletedCounts.goals} goals\n` +
+        `- ${result.deletedCounts.accounts} accounts\n` +
+        `- ${result.deletedCounts.clients} clients`;
+
+      alert(message);
+
+      // Refresh batches list
+      await fetchBatches();
+    } catch (error) {
+      console.error("Failed to rollback batch:", error);
+      alert(`Failed to delete batch: ${(error as Error).message}`);
+    }
+  };
+
   // Helper function to normalize validation data (handle both array and object formats)
   const normalizeValidationData = (data: any): any[] => {
     if (!data) return [];
@@ -589,13 +626,23 @@ const FundUpload = () => {
 
                         {/* Actions for COMPLETED or FAILED */}
                         {(batch.processingStatus === "COMPLETED" || batch.processingStatus === "FAILED") && (
-                          <button
-                            onClick={() => handleViewValidation(batch.batchId)}
-                            className="inline-flex items-center px-3 py-1 text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
-                          >
-                            <AlertCircle className="h-4 w-4 mr-1" />
-                            View Details
-                          </button>
+                          <>
+                            <button
+                              onClick={() => handleViewValidation(batch.batchId)}
+                              className="inline-flex items-center px-3 py-1 text-blue-700 hover:text-blue-900 bg-blue-50 hover:bg-blue-100 rounded-md transition-colors"
+                            >
+                              <AlertCircle className="h-4 w-4 mr-1" />
+                              View Details
+                            </button>
+                            <button
+                              onClick={() => handleRollbackBatch(batch.batchId, batch.fileName)}
+                              className="inline-flex items-center px-3 py-1 text-red-700 hover:text-red-900 bg-red-50 hover:bg-red-100 rounded-md transition-colors"
+                              title="Delete this batch and all associated data"
+                            >
+                              <Trash2 className="h-4 w-4 mr-1" />
+                              Delete
+                            </button>
+                          </>
                         )}
                       </div>
                     </td>

@@ -76,6 +76,14 @@ export class FundFileProcessor {
           logger.error(`   Message: ${error.message}`);
           logger.error(`   Value: ${JSON.stringify(error.value)}`);
         });
+
+        // Update processing status to FAILED (validation errors already saved above at line 54-60)
+        // Don't call updateBatchWithError as it would overwrite the detailed validation errors
+        const batch = await UploadBatchManager.getBatch(batchId);
+        if (batch) {
+          await UploadBatchManager.updateBatchStatus(batchId, 'FAILED');
+        }
+
         throw new Error(
           `Goal transaction validation failed with ${criticalGroupErrors.length} critical errors`
         );
@@ -104,7 +112,13 @@ export class FundFileProcessor {
       await this.finalizeProcessing(batchId, validationResult.validTransactions);
     } catch (error: any) {
       logger.error(`File processing failed for batch ${batchId}:`, error);
-      await UploadBatchManager.updateBatchWithError(batchId, error);
+
+      // Don't overwrite detailed errors if they were already saved
+      // (e.g., for goal transaction validation errors)
+      if (!error.message.includes('Goal transaction validation failed')) {
+        await UploadBatchManager.updateBatchWithError(batchId, error);
+      }
+
       throw error;
     }
   }
@@ -148,7 +162,12 @@ export class FundFileProcessor {
       logger.info('finalizeProcessing completed');
     } catch (error: any) {
       logger.error(`Resume processing failed for batch ${batchId}:`, error);
-      await UploadBatchManager.updateBatchWithError(batchId, error);
+
+      // Don't overwrite detailed errors if they were already saved
+      if (!error.message.includes('Goal transaction validation failed')) {
+        await UploadBatchManager.updateBatchWithError(batchId, error);
+      }
+
       throw error;
     }
   }
