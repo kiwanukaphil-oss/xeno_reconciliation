@@ -7,6 +7,8 @@ import { errorHandler, notFoundHandler } from './middleware/errorHandler';
 // Import routes
 import fundUploadRoutes from './routes/fundUploadRoutes';
 import goalTransactionRoutes from './routes/goalTransactionRoutes';
+import fundPriceRoutes from './routes/fundPriceRoutes';
+import unitRegistryRoutes from './routes/unitRegistryRoutes';
 
 const app = express();
 
@@ -33,6 +35,8 @@ app.get('/health', (_req, res) => {
 // API Routes
 app.use('/api/fund-upload', fundUploadRoutes);
 app.use('/api/goal-transactions', goalTransactionRoutes);
+app.use('/api/fund-prices', fundPriceRoutes);
+app.use('/api/unit-registry', unitRegistryRoutes);
 
 // 404 handler
 app.use(notFoundHandler);

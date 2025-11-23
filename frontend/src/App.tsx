@@ -9,6 +9,8 @@ import {
   CheckSquare,
   TrendingUp,
   Users,
+  DollarSign,
+  Wallet,
 } from "lucide-react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
@@ -19,6 +21,8 @@ import Dashboard from "./components/Dashboard";
 import FundUpload from "./components/fund-upload/FundUpload";
 import GoalTransactions from "./components/transactions/GoalTransactions";
 import ApprovalQueue from "./components/approval/ApprovalQueue";
+import { FundPrices } from "./components/fund-price/FundPrices";
+import { UnitRegistry } from "./components/unit-registry/UnitRegistry";
 
 const App = () => {
   const [activeModule, setActiveModule] = useState("dashboard");
@@ -36,6 +40,18 @@ const App = () => {
       name: "Fund Upload",
       icon: Upload,
       description: "Upload CSV/Excel files",
+    },
+    {
+      id: "fund-prices",
+      name: "Fund Prices",
+      icon: DollarSign,
+      description: "Upload and view daily fund prices",
+    },
+    {
+      id: "unit-registry",
+      name: "Unit Registry",
+      icon: Wallet,
+      description: "Client portfolio positions and values",
     },
     {
       id: "goal-transactions",
@@ -69,6 +85,10 @@ const App = () => {
         return <Dashboard />;
       case "upload":
         return <FundUpload />;
+      case "fund-prices":
+        return <FundPrices />;
+      case "unit-registry":
+        return <UnitRegistry />;
       case "goal-transactions":
         return <GoalTransactions />;
       case "approval":

@@ -11,7 +11,11 @@ const router = Router();
  */
 router.get('/', async (req: Request, res: Response) => {
   try {
-    const includeZeroBalances = req.query.includeZeroBalances === 'true';
+    // showOnlyFunded defaults to true unless explicitly set to false
+    const showOnlyFunded = req.query.showOnlyFunded !== 'false';
+    const fundedThreshold = req.query.fundedThreshold
+      ? parseFloat(req.query.fundedThreshold as string)
+      : 5000;
     const search = req.query.search as string | undefined;
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
     const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
@@ -19,7 +23,8 @@ router.get('/', async (req: Request, res: Response) => {
     const sortOrder = (req.query.sortOrder as 'asc' | 'desc') || 'asc';
 
     const result = await UnitRegistryService.getUnitRegistry({
-      includeZeroBalances,
+      showOnlyFunded,
+      fundedThreshold,
       search,
       limit,
       offset,

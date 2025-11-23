@@ -58,7 +58,8 @@ export class UnitRegistryService {
    * Uses pre-aggregated account_unit_balances for 10-100x faster queries
    */
   static async getUnitRegistry(filters: {
-    includeZeroBalances?: boolean;
+    showOnlyFunded?: boolean;
+    fundedThreshold?: number;
     search?: string;
     limit?: number;
     offset?: number;
@@ -66,7 +67,8 @@ export class UnitRegistryService {
     sortOrder?: 'asc' | 'desc';
   } = {}): Promise<UnitRegistryResult> {
     const {
-      includeZeroBalances = false,
+      showOnlyFunded = true, // Default: show only funded accounts
+      fundedThreshold = 5000, // Default threshold: 5000 UGX
       search,
       limit = 100,
       offset = 0,
@@ -91,8 +93,10 @@ export class UnitRegistryService {
         conditions.push(`(LOWER("accountNumber") LIKE $1 OR LOWER("clientName") LIKE $1)`);
       }
 
-      if (!includeZeroBalances) {
-        conditions.push('total_units > 0');
+      // Filter by funded accounts (total portfolio value >= threshold)
+      if (showOnlyFunded) {
+        const totalValueFormula = `(xummf_units * ${latestPrices.XUMMF || 0} + xubf_units * ${latestPrices.XUBF || 0} + xudef_units * ${latestPrices.XUDEF || 0} + xuref_units * ${latestPrices.XUREF || 0})`;
+        conditions.push(`${totalValueFormula} >= ${fundedThreshold}`);
       }
 
       const fullWhereClause =

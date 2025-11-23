@@ -122,3 +122,65 @@ export const fetchFunds = async () => {
   const response = await fetch(`${API_URL}/api/funds`);
   return handleResponse(response);
 };
+
+// Fund Price APIs
+export const uploadFundPrices = async (file: File) => {
+  const formData = new FormData();
+  formData.append("file", file);
+
+  const response = await fetch(`${API_URL}/api/fund-prices/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  return handleResponse(response);
+};
+
+export const fetchFundPrices = async (params: URLSearchParams) => {
+  const response = await fetch(`${API_URL}/api/fund-prices?${params}`);
+  return handleResponse(response);
+};
+
+export const fetchLatestFundPrices = async () => {
+  const response = await fetch(`${API_URL}/api/fund-prices/latest`);
+  return handleResponse(response);
+};
+
+export const fetchFundPriceByDate = async (fundCode: string, date: string) => {
+  const response = await fetch(`${API_URL}/api/fund-prices/${fundCode}/${date}`);
+  return handleResponse(response);
+};
+
+export const deleteFundPrice = async (id: string) => {
+  const response = await fetch(`${API_URL}/api/fund-prices/${id}`, {
+    method: "DELETE",
+  });
+  return handleResponse(response);
+};
+
+export const downloadFundPriceTemplate = async () => {
+  const response = await fetch(`${API_URL}/api/fund-prices/template/download`);
+  if (!response.ok) {
+    throw new Error("Failed to download template");
+  }
+  return response.blob();
+};
+
+// Unit Registry APIs
+export const fetchUnitRegistry = async (
+  search: string = "",
+  showOnlyFunded: boolean = true,
+  fundedThreshold: number = 5000,
+  limit: number = 100,
+  offset: number = 0
+) => {
+  const params = new URLSearchParams();
+  if (search) params.append("search", search);
+  // Only send showOnlyFunded if false (default is true on backend)
+  if (!showOnlyFunded) params.append("showOnlyFunded", "false");
+  if (fundedThreshold !== 5000) params.append("fundedThreshold", fundedThreshold.toString());
+  params.append("limit", limit.toString());
+  params.append("offset", offset.toString());
+
+  const response = await fetch(`${API_URL}/api/unit-registry?${params}`);
+  return handleResponse(response);
+};
