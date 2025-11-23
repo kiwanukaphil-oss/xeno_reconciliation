@@ -190,6 +190,20 @@ XENO Reconciliation/
 - PUT /api/fund-transactions/:id
 - DELETE /api/fund-transactions/:id
 
+### Fund Prices
+- POST /api/fund-prices/upload - Upload daily fund prices (Excel with 3 tabs: bid, mid, offer)
+- GET /api/fund-prices/template/download - Download fund price template Excel file
+- GET /api/fund-prices - Get fund prices with filters (fundCode, date range, pagination)
+- GET /api/fund-prices/latest - Get latest prices for all funds
+- GET /api/fund-prices/:fundCode/:date - Get price for specific fund and date
+- DELETE /api/fund-prices/:id - Delete a fund price record
+
+**Fund Price Upload Format:**
+- Excel file with 3 tabs: **bid**, **mid**, **offer**
+- Each tab has columns: Date | XUMMF | XUBF | XUDEF | XUREF
+- System validates: bidPrice ≤ midPrice ≤ offerPrice
+- Supports both new 3-tab format and legacy row format for backward compatibility
+
 ### Reporting
 - GET /api/reports/fund-balances
 - GET /api/reports/client-portfolio
@@ -223,6 +237,8 @@ XENO Reconciliation/
 - ✅ Goal transaction reporting service
 - ✅ Database repositories
 - ✅ Error handling and logging
+- ✅ Fund price upload and management
+- ✅ Fund price viewing (latest and historical)
 
 ### Ready for Testing 🧪
 - 🧪 Full upload pipeline
@@ -243,6 +259,7 @@ XENO Reconciliation/
 ## Reference Files
 - `Reference Docs/Client Fund transactions.csv` - Sample fund transaction data
 - `Reference Docs/goal transaction.csv` - Aggregated goal transaction format
+- `Reference Docs/fund_prices_template.xlsx` - Fund prices upload template (3-tab format)
 
 ---
 

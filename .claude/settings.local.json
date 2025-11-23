@@ -48,7 +48,21 @@
       "Bash(powershell -Command \"Stop-Process -Id 63496 -Force\")",
       "Bash(src/app.ts)",
       "Bash(node:*)",
-      "Bash(more:*)"
+      "Bash(more:*)",
+      "Bash(NUL)",
+      "Bash(powershell -Command \"Get-Process | Where-Object {$_Id -eq 51360} | Stop-Process -Force\")",
+      "Bash(powershell -Command \"Get-Process node | Select-Object Id, ProcessName, StartTime | Format-Table -AutoSize\")",
+      "Bash(rd /s /q \"node_modules\\.prisma\\client\")",
+      "Bash(powershell -Command:*)",
+      "Bash(echo:*)",
+      "Bash(src/routes/goalTransactionRoutes.ts)",
+      "Bash(npm run prisma:migrate:dev:*)",
+      "Bash(rd /s /q \"prisma\\migrations\\20251119114454_add_fund_transaction_id_and_sponsor_code\")",
+      "Bash(del \"c:\\Users\\kiwan\\OneDrive\\PROJECTS\\XENO Reconciliation\\Reference Docs\\fund_prices_template.csv\")",
+      "Bash(del \"c:\\Users\\kiwan\\OneDrive\\PROJECTS\\XENO Reconciliation\\frontend\\src\\components\\fund-price\\FundPriceList.tsx\")",
+      "Bash(cat:*)",
+      "Bash(npm run:*)",
+      "Bash(xargs -I {} powershell -Command \"Stop-Process -Id {} -Force -ErrorAction SilentlyContinue\")"
     ],
     "deny": [],
     "ask": []
