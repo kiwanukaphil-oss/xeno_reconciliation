@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { fetchUnitRegistry } from "../../services/api";
 
 interface Units {
@@ -101,6 +102,60 @@ export function UnitRegistry() {
 
   const handleNextPage = () => {
     setOffset(offset + limit);
+  };
+
+  const handleGoToPage = (page: number) => {
+    const newOffset = (page - 1) * limit;
+    setOffset(newOffset);
+  };
+
+  const handlePageInputSubmit = (e: React.FormEvent<HTMLFormElement>) => {
+    e.preventDefault();
+    const input = e.currentTarget.elements.namedItem('pageNumber') as HTMLInputElement;
+    const pageNum = parseInt(input.value);
+    const totalPages = Math.ceil(total / limit);
+    if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
+      handleGoToPage(pageNum);
+      input.value = '';
+    }
+  };
+
+  // Generate page numbers to display
+  const getPageNumbers = () => {
+    const pages: (number | string)[] = [];
+    const totalPages = Math.ceil(total / limit);
+    const currentPage = Math.floor(offset / limit) + 1;
+
+    if (totalPages <= 7) {
+      // Show all pages if 7 or fewer
+      for (let i = 1; i <= totalPages; i++) {
+        pages.push(i);
+      }
+    } else {
+      // Always show first page
+      pages.push(1);
+
+      if (currentPage > 3) {
+        pages.push('...');
+      }
+
+      // Show pages around current page
+      const startPage = Math.max(2, currentPage - 1);
+      const endPage = Math.min(totalPages - 1, currentPage + 1);
+
+      for (let i = startPage; i <= endPage; i++) {
+        pages.push(i);
+      }
+
+      if (currentPage < totalPages - 2) {
+        pages.push('...');
+      }
+
+      // Always show last page
+      pages.push(totalPages);
+    }
+
+    return pages;
   };
 
   const sortedEntries = [...entries].sort((a, b) => {
@@ -303,25 +358,82 @@ export function UnitRegistry() {
               </div>
 
               {/* Pagination Controls */}
-              <div className="pagination">
-                <button
-                  className="btn btn-secondary"
-                  onClick={handlePrevPage}
-                  disabled={offset === 0}
-                >
-                  Previous
-                </button>
-                <span className="page-info">
-                  Showing {offset + 1} - {Math.min(offset + limit, total)} of {total}
-                </span>
-                <button
-                  className="btn btn-secondary"
-                  onClick={handleNextPage}
-                  disabled={offset + limit >= total}
-                >
-                  Next
-                </button>
-              </div>
+              {Math.ceil(total / limit) > 1 && (
+                <div className="pagination-container">
+                  <div className="pagination-info">
+                    Showing page {Math.floor(offset / limit) + 1} of {Math.ceil(total / limit)}
+                    <span style={{ marginLeft: '8px' }}>
+                      ({entries.length} of {total} accounts)
+                    </span>
+                  </div>
+
+                  <div className="pagination-buttons">
+                    {/* Previous button */}
+                    <button
+                      onClick={handlePrevPage}
+                      disabled={offset === 0}
+                      className="pagination-btn pagination-nav"
+                      title="Previous page"
+                    >
+                      <ChevronLeft style={{ width: '16px', height: '16px' }} />
+                    </button>
+
+                    {/* Page number buttons */}
+                    {getPageNumbers().map((pageNum, index) => (
+                      pageNum === '...' ? (
+                        <span key={`ellipsis-${index}`} className="pagination-ellipsis">
+                          ...
+                        </span>
+                      ) : (
+                        <button
+                          key={`page-${pageNum}`}
+                          onClick={() => handleGoToPage(pageNum as number)}
+                          className={`pagination-btn ${
+                            Math.floor(offset / limit) + 1 === pageNum
+                              ? 'pagination-active'
+                              : ''
+                          }`}
+                        >
+                          {pageNum}
+                        </button>
+                      )
+                    ))}
+
+                    {/* Next button */}
+                    <button
+                      onClick={handleNextPage}
+                      disabled={offset + limit >= total}
+                      className="pagination-btn pagination-nav"
+                      title="Next page"
+                    >
+                      <ChevronRight style={{ width: '16px', height: '16px' }} />
+                    </button>
+                  </div>
+
+                  {/* Go to page input */}
+                  {Math.ceil(total / limit) > 7 && (
+                    <div className="pagination-goto">
+                      <form onSubmit={handlePageInputSubmit} className="pagination-form">
+                        <label htmlFor="pageNumber" className="pagination-label">
+                          Go to page:
+                        </label>
+                        <input
+                          type="number"
+                          id="pageNumber"
+                          name="pageNumber"
+                          min="1"
+                          max={Math.ceil(total / limit)}
+                          placeholder={`1-${Math.ceil(total / limit)}`}
+                          className="pagination-input"
+                        />
+                        <button type="submit" className="pagination-go-btn">
+                          Go
+                        </button>
+                      </form>
+                    </div>
+                  )}
+                </div>
+              )}
 
               {/* Current Prices Info */}
               {prices && (
@@ -556,41 +668,119 @@ export function UnitRegistry() {
           background-color: #c3e6cb !important;
         }
 
-        .pagination {
+        .pagination-container {
           display: flex;
-          justify-content: center;
-          align-items: center;
-          gap: 15px;
-          padding: 15px 0;
+          flex-direction: column;
+          gap: 16px;
+          padding: 20px 0;
           border-top: 1px solid #e0e0e0;
         }
 
-        .btn {
-          padding: 8px 16px;
-          border: none;
-          border-radius: 4px;
+        .pagination-info {
+          text-align: center;
           font-size: 14px;
+          color: #666;
+        }
+
+        .pagination-buttons {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          gap: 4px;
+          flex-wrap: wrap;
+        }
+
+        .pagination-btn {
+          display: inline-flex;
+          align-items: center;
+          justify-content: center;
+          padding: 8px 12px;
+          min-width: 40px;
+          font-size: 14px;
+          background-color: #f8f9fa;
+          color: #333;
+          border: 1px solid #ddd;
+          border-radius: 4px;
           cursor: pointer;
           transition: all 0.2s;
         }
 
-        .btn-secondary {
-          background-color: #6c757d;
-          color: white;
+        .pagination-btn:hover:not(:disabled) {
+          background-color: #e9ecef;
         }
 
-        .btn-secondary:hover:not(:disabled) {
-          background-color: #5a6268;
-        }
-
-        .btn-secondary:disabled {
-          opacity: 0.5;
+        .pagination-btn:disabled {
+          background-color: #f8f9fa;
+          color: #ccc;
           cursor: not-allowed;
+          opacity: 0.5;
         }
 
-        .page-info {
+        .pagination-active {
+          background-color: #007bff;
+          color: white;
+          font-weight: 600;
+          border-color: #007bff;
+        }
+
+        .pagination-active:hover {
+          background-color: #0056b3;
+          border-color: #0056b3;
+        }
+
+        .pagination-nav {
+          padding: 8px;
+        }
+
+        .pagination-ellipsis {
+          padding: 8px 12px;
+          color: #666;
+        }
+
+        .pagination-goto {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+        }
+
+        .pagination-form {
+          display: flex;
+          align-items: center;
+          gap: 8px;
+        }
+
+        .pagination-label {
           font-size: 14px;
           color: #666;
+        }
+
+        .pagination-input {
+          width: 80px;
+          padding: 8px 12px;
+          font-size: 14px;
+          border: 1px solid #ddd;
+          border-radius: 4px;
+        }
+
+        .pagination-input:focus {
+          outline: none;
+          border-color: #007bff;
+          box-shadow: 0 0 0 3px rgba(0, 123, 255, 0.1);
+        }
+
+        .pagination-go-btn {
+          padding: 8px 16px;
+          font-size: 14px;
+          background-color: #007bff;
+          color: white;
+          border: none;
+          border-radius: 4px;
+          cursor: pointer;
+          transition: background-color 0.2s;
+        }
+
+        .pagination-go-btn:hover {
+          background-color: #0056b3;
         }
 
         .price-info {
