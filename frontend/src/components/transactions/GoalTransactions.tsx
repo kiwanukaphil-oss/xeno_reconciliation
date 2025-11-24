@@ -228,6 +228,15 @@ const GoalTransactions = () => {
     });
   };
 
+  const formatName = (name: string) => {
+    if (!name) return "";
+    return name
+      .toLowerCase()
+      .split(" ")
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  };
+
   return (
     <div className="p-6 space-y-6">
       {/* Header */}
@@ -454,7 +463,7 @@ const GoalTransactions = () => {
                       {formatDate(transaction.transactionDate)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
-                      {transaction.clientName}
+                      {formatName(transaction.clientName)}
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
                       {transaction.accountNumber}
