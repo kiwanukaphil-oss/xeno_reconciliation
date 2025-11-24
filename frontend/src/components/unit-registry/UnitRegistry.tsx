@@ -157,6 +157,15 @@ export function UnitRegistry() {
     });
   };
 
+  const formatName = (name: string) => {
+    if (!name) return "";
+    return name
+      .toLowerCase()
+      .split(" ")
+      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(" ");
+  };
+
   const SortIcon = ({ column }: { column: string }) => {
     if (sortColumn !== column) {
       return <span className="sort-icon">⇅</span>;
@@ -261,7 +270,7 @@ export function UnitRegistry() {
                   <tbody>
                     {sortedEntries.map((entry, idx) => (
                       <tr key={`${entry.accountNumber}-${idx}`}>
-                        <td className="client-name">{entry.clientName}</td>
+                        <td className="client-name">{formatName(entry.clientName)}</td>
                         <td className="account-number">{entry.accountNumber}</td>
                         <td className="right-align units">{formatNumber(entry.units.XUMMF, 4)}</td>
                         <td className="right-align units">{formatNumber(entry.units.XUBF, 4)}</td>
