@@ -8,6 +8,7 @@ export interface UnitRegistryEntry {
   clientName: string;
   accountNumber: string;
   accountType: string;
+  accountCategory: string;
   lastTransactionDate: Date | null;
   units: {
     XUMMF: number;
@@ -61,6 +62,8 @@ export class UnitRegistryService {
     showOnlyFunded?: boolean;
     fundedThreshold?: number;
     search?: string;
+    accountType?: string;
+    accountCategory?: string;
     limit?: number;
     offset?: number;
     sortBy?: string;
@@ -70,6 +73,8 @@ export class UnitRegistryService {
       showOnlyFunded = true, // Default: show only funded accounts
       fundedThreshold = 5000, // Default threshold: 5000 UGX
       search,
+      accountType,
+      accountCategory,
       limit = 100,
       offset = 0,
       sortBy = 'clientName',
@@ -82,15 +87,30 @@ export class UnitRegistryService {
       // Get latest fund prices (cached)
       const latestPrices = await this.getLatestPrices();
 
-      // Build WHERE clause for search
-      const searchParam = search ? [`%${search.toLowerCase()}%`] : [];
-      const hasSearch = search !== undefined && search !== '';
-
-      // Build WHERE conditions
+      // Build WHERE clause parameters
+      const queryParams: any[] = [];
       const conditions: string[] = [];
+      let paramIndex = 1;
 
-      if (hasSearch) {
-        conditions.push(`(LOWER("accountNumber") LIKE $1 OR LOWER("clientName") LIKE $1)`);
+      // Search filter
+      if (search !== undefined && search !== '') {
+        conditions.push(`(LOWER("accountNumber") LIKE $${paramIndex} OR LOWER("clientName") LIKE $${paramIndex})`);
+        queryParams.push(`%${search.toLowerCase()}%`);
+        paramIndex++;
+      }
+
+      // Account type filter (cast to text for comparison since it's an enum)
+      if (accountType) {
+        conditions.push(`"accountType"::text = $${paramIndex}`);
+        queryParams.push(accountType);
+        paramIndex++;
+      }
+
+      // Account category filter (cast to text for comparison since it's an enum)
+      if (accountCategory) {
+        conditions.push(`"accountCategory"::text = $${paramIndex}`);
+        queryParams.push(accountCategory);
+        paramIndex++;
       }
 
       // Filter by funded accounts (total portfolio value >= threshold)
@@ -128,7 +148,7 @@ export class UnitRegistryService {
         ${fullWhereClause}
       `;
 
-      const countResult: any[] = await prisma.$queryRawUnsafe(countQuery, ...searchParam);
+      const countResult: any[] = await prisma.$queryRawUnsafe(countQuery, ...queryParams);
       const total = Number(countResult[0]?.total) || 0;
 
       // Query materialized view (SUPER FAST - data already aggregated)
@@ -137,6 +157,7 @@ export class UnitRegistryService {
           "clientName",
           "accountNumber",
           "accountType",
+          "accountCategory",
           last_transaction_date as "lastTransactionDate",
           xummf_units,
           xubf_units,
@@ -145,10 +166,10 @@ export class UnitRegistryService {
         FROM account_unit_balances
         ${fullWhereClause}
         ${orderByClause}
-        LIMIT $${searchParam.length + 1} OFFSET $${searchParam.length + 2}
+        LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
       `;
 
-      const params = [...searchParam, limit, offset];
+      const params = [...queryParams, limit, offset];
       const rawResults: any[] = await prisma.$queryRawUnsafe(query, ...params);
 
       logger.info(`Loaded ${rawResults.length} account positions from materialized view`);
@@ -175,6 +196,7 @@ export class UnitRegistryService {
           clientName: row.clientName,
           accountNumber: row.accountNumber,
           accountType: row.accountType,
+          accountCategory: row.accountCategory,
           lastTransactionDate: row.lastTransactionDate,
           units,
           values,
@@ -194,7 +216,7 @@ export class UnitRegistryService {
         ${fullWhereClause}
       `;
 
-      const summaryResult: any[] = await prisma.$queryRawUnsafe(summaryQuery, ...searchParam);
+      const summaryResult: any[] = await prisma.$queryRawUnsafe(summaryQuery, ...queryParams);
       const summaryRow = summaryResult[0];
 
       const totalUnits = {
@@ -311,3 +333,4 @@ export class UnitRegistryService {
     logger.info('Fund prices cache invalidated');
   }
 }
+

@@ -17,6 +17,8 @@ router.get('/', async (req: Request, res: Response) => {
       ? parseFloat(req.query.fundedThreshold as string)
       : 5000;
     const search = req.query.search as string | undefined;
+    const accountType = req.query.accountType as string | undefined;
+    const accountCategory = req.query.accountCategory as string | undefined;
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
     const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
     const sortBy = (req.query.sortBy as string) || 'clientName';
@@ -26,6 +28,8 @@ router.get('/', async (req: Request, res: Response) => {
       showOnlyFunded,
       fundedThreshold,
       search,
+      accountType,
+      accountCategory,
       limit,
       offset,
       sortBy,

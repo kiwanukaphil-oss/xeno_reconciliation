@@ -171,13 +171,17 @@ export const fetchUnitRegistry = async (
   showOnlyFunded: boolean = true,
   fundedThreshold: number = 5000,
   limit: number = 100,
-  offset: number = 0
+  offset: number = 0,
+  accountType: string = "",
+  accountCategory: string = ""
 ) => {
   const params = new URLSearchParams();
   if (search) params.append("search", search);
   // Only send showOnlyFunded if false (default is true on backend)
   if (!showOnlyFunded) params.append("showOnlyFunded", "false");
   if (fundedThreshold !== 5000) params.append("fundedThreshold", fundedThreshold.toString());
+  if (accountType) params.append("accountType", accountType);
+  if (accountCategory) params.append("accountCategory", accountCategory);
   params.append("limit", limit.toString());
   params.append("offset", offset.toString());
 

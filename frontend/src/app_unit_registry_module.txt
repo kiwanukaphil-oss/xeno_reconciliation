@@ -1,0 +1,6 @@
+    {
+      id: "unit-registry",
+      name: "Unit Registry",
+      icon: Wallet,
+      description: "Client portfolio positions and values",
+    },

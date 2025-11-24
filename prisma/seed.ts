@@ -299,56 +299,11 @@ async function main() {
   }
 
   // ============================================================================
-  // SEED SAMPLE FUND PRICES (Last 7 days)
+  // NOTE: Fund prices are NOT seeded
   // ============================================================================
-  console.log('\nSeeding sample fund prices...');
-
-  const today = new Date();
-  const fundPrices = [
-    // XUMMF - Money Market (stable prices)
-    { fundCode: 'XUMMF', bidPrice: 99.50, offerPrice: 100.00, midPrice: 99.75, nav: 100.00 },
-    // XUBF - Bond Fund
-    { fundCode: 'XUBF', bidPrice: 111.68, offerPrice: 111.80, midPrice: 111.74, nav: 111.91 },
-    // XUDEF - Domestic Equity
-    { fundCode: 'XUDEF', bidPrice: 145.20, offerPrice: 145.50, midPrice: 145.35, nav: 145.60 },
-    // XUREF - Regional Equity
-    { fundCode: 'XUREF', bidPrice: 178.90, offerPrice: 179.30, midPrice: 179.10, nav: 179.50 },
-  ];
-
-  for (let i = 0; i < 7; i++) {
-    const priceDate = new Date(today);
-    priceDate.setDate(today.getDate() - i);
-
-    for (const price of fundPrices) {
-      const fund = await prisma.fund.findUnique({
-        where: { fundCode: price.fundCode },
-      });
-
-      if (fund) {
-        // Add slight variation for historical prices (±0.5%)
-        const variance = 1 + (Math.random() - 0.5) * 0.01;
-
-        await prisma.fundPrice.upsert({
-          where: {
-            fundId_priceDate: {
-              fundId: fund.id,
-              priceDate,
-            },
-          },
-          update: {},
-          create: {
-            fundId: fund.id,
-            priceDate,
-            bidPrice: price.bidPrice * variance,
-            offerPrice: price.offerPrice * variance,
-            midPrice: price.midPrice * variance,
-            nav: price.nav ? price.nav * variance : null,
-          },
-        });
-      }
-    }
-  }
-  console.log('  ✓ Fund prices created for last 7 days');
+  // Fund prices must be uploaded manually via the fund price upload feature.
+  // We do NOT generate fake/sample prices for a production financial system.
+  console.log('\nSkipping fund price seeding (prices must be uploaded manually)');
 
   console.log('\n✅ Database seed completed successfully!');
 }

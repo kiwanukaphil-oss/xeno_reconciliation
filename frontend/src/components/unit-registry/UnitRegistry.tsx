@@ -20,6 +20,7 @@ interface UnitRegistryEntry {
   clientName: string;
   accountNumber: string;
   accountType: string;
+  accountCategory: string;
   lastTransactionDate: string | null;
   units: Units;
   values: Values;
@@ -56,6 +57,8 @@ export function UnitRegistry() {
   const [search, setSearch] = useState("");
   const [showOnlyFunded, setShowOnlyFunded] = useState(true);
   const [fundedThreshold] = useState(5000);
+  const [accountType, setAccountType] = useState("");
+  const [accountCategory, setAccountCategory] = useState("");
   const [sortColumn, setSortColumn] = useState<string | null>(null);
   const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
 
@@ -66,14 +69,22 @@ export function UnitRegistry() {
 
   useEffect(() => {
     loadRegistry();
-  }, [search, showOnlyFunded, offset]);
+  }, [search, showOnlyFunded, accountType, accountCategory, offset]);
 
   const loadRegistry = async () => {
     try {
       setLoading(true);
       setError(null);
 
-      const data = await fetchUnitRegistry(search, showOnlyFunded, fundedThreshold, limit, offset);
+      const data = await fetchUnitRegistry(
+        search,
+        showOnlyFunded,
+        fundedThreshold,
+        limit,
+        offset,
+        accountType,
+        accountCategory
+      );
 
       setEntries(data.entries || []);
       setAsOfDate(data.asOfDate);
@@ -252,6 +263,42 @@ export function UnitRegistry() {
               onChange={(e) => setSearch(e.target.value)}
               className="search-input"
             />
+          </div>
+          <div className="filter-group">
+            <label htmlFor="accountType" className="filter-label">Account Type:</label>
+            <select
+              id="accountType"
+              value={accountType}
+              onChange={(e) => {
+                setAccountType(e.target.value);
+                setOffset(0); // Reset to first page when filter changes
+              }}
+              className="filter-select"
+            >
+              <option value="">All Types</option>
+              <option value="PERSONAL">Personal</option>
+              <option value="POOLED">Pooled</option>
+              <option value="JOINT">Joint</option>
+              <option value="LINKED">Linked</option>
+            </select>
+          </div>
+          <div className="filter-group">
+            <label htmlFor="accountCategory" className="filter-label">Account Category:</label>
+            <select
+              id="accountCategory"
+              value={accountCategory}
+              onChange={(e) => {
+                setAccountCategory(e.target.value);
+                setOffset(0); // Reset to first page when filter changes
+              }}
+              className="filter-select"
+            >
+              <option value="">All Categories</option>
+              <option value="GENERAL">General</option>
+              <option value="FAMILY">Family</option>
+              <option value="INVESTMENT_CLUBS">Investment Clubs</option>
+              <option value="RETIREMENTS_BENEFIT_SCHEME">Retirements Benefit Scheme</option>
+            </select>
           </div>
           <div className="filter-group">
             <label className="checkbox-label">

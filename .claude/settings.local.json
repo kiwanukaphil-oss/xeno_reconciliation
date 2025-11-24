@@ -62,7 +62,10 @@
       "Bash(del \"c:\\Users\\kiwan\\OneDrive\\PROJECTS\\XENO Reconciliation\\frontend\\src\\components\\fund-price\\FundPriceList.tsx\")",
       "Bash(cat:*)",
       "Bash(npm run:*)",
-      "Bash(xargs -I {} powershell -Command \"Stop-Process -Id {} -Force -ErrorAction SilentlyContinue\")"
+      "Bash(xargs -I {} powershell -Command \"Stop-Process -Id {} -Force -ErrorAction SilentlyContinue\")",
+      "Bash(ping:*)",
+      "Bash(del NUL 2)",
+      "Bash(.gitignore)"
     ],
     "deny": [],
     "ask": []
