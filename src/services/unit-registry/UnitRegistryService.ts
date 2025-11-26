@@ -10,6 +10,7 @@ export interface UnitRegistryEntry {
   accountNumber: string;
   accountType: string;
   accountCategory: string;
+  goalCount: number;
   lastTransactionDate: Date | null;
   units: {
     XUMMF: number;
@@ -120,28 +121,28 @@ export class UnitRegistryService {
 
       // Search filter
       if (search !== undefined && search !== '') {
-        conditions.push(`(LOWER("accountNumber") LIKE $${paramIndex} OR LOWER("clientName") LIKE $${paramIndex})`);
+        conditions.push(`(LOWER(aub."accountNumber") LIKE $${paramIndex} OR LOWER(aub."clientName") LIKE $${paramIndex})`);
         queryParams.push(`%${search.toLowerCase()}%`);
         paramIndex++;
       }
 
       // Account type filter (cast to text for comparison since it's an enum)
       if (accountType) {
-        conditions.push(`"accountType"::text = $${paramIndex}`);
+        conditions.push(`aub."accountType"::text = $${paramIndex}`);
         queryParams.push(accountType);
         paramIndex++;
       }
 
       // Account category filter (cast to text for comparison since it's an enum)
       if (accountCategory) {
-        conditions.push(`"accountCategory"::text = $${paramIndex}`);
+        conditions.push(`aub."accountCategory"::text = $${paramIndex}`);
         queryParams.push(accountCategory);
         paramIndex++;
       }
 
       // Filter by funded accounts (total portfolio value >= threshold)
       if (showOnlyFunded) {
-        const totalValueFormula = `(xummf_units * ${latestPrices.XUMMF || 0} + xubf_units * ${latestPrices.XUBF || 0} + xudef_units * ${latestPrices.XUDEF || 0} + xuref_units * ${latestPrices.XUREF || 0})`;
+        const totalValueFormula = `(aub.xummf_units * ${latestPrices.XUMMF || 0} + aub.xubf_units * ${latestPrices.XUBF || 0} + aub.xudef_units * ${latestPrices.XUDEF || 0} + aub.xuref_units * ${latestPrices.XUREF || 0})`;
         conditions.push(`${totalValueFormula} >= ${fundedThreshold}`);
       }
 
@@ -150,17 +151,17 @@ export class UnitRegistryService {
 
       // Map sortBy to database column (with SQL injection protection)
       const sortColumnMap: Record<string, string> = {
-        clientName: '"clientName"',
-        accountNumber: '"accountNumber"',
-        accountType: '"accountType"',
-        lastTransactionDate: 'last_transaction_date',
-        xummfUnits: 'xummf_units',
-        xubfUnits: 'xubf_units',
-        xudefUnits: 'xudef_units',
-        xurefUnits: 'xuref_units',
-        totalUnits: 'total_units',
+        clientName: 'aub."clientName"',
+        accountNumber: 'aub."accountNumber"',
+        accountType: 'aub."accountType"',
+        lastTransactionDate: 'aub.last_transaction_date',
+        xummfUnits: 'aub.xummf_units',
+        xubfUnits: 'aub.xubf_units',
+        xudefUnits: 'aub.xudef_units',
+        xurefUnits: 'aub.xuref_units',
+        totalUnits: 'aub.total_units',
         // Calculated column for total value (will be calculated at query time if needed)
-        totalValue: `(xummf_units * ${latestPrices.XUMMF || 0} + xubf_units * ${latestPrices.XUBF || 0} + xudef_units * ${latestPrices.XUDEF || 0} + xuref_units * ${latestPrices.XUREF || 0})`,
+        totalValue: `(aub.xummf_units * ${latestPrices.XUMMF || 0} + aub.xubf_units * ${latestPrices.XUBF || 0} + aub.xudef_units * ${latestPrices.XUDEF || 0} + aub.xuref_units * ${latestPrices.XUREF || 0})`,
       };
 
       const sortColumn = sortColumnMap[sortBy] || sortColumnMap.clientName;
@@ -170,7 +171,7 @@ export class UnitRegistryService {
       // Get total count for pagination (FAST - no aggregation needed)
       const countQuery = `
         SELECT COUNT(*) as total
-        FROM account_unit_balances
+        FROM account_unit_balances aub
         ${fullWhereClause}
       `;
 
@@ -180,17 +181,22 @@ export class UnitRegistryService {
       // Query materialized view (SUPER FAST - data already aggregated)
       const query = `
         SELECT
-          account_id as "accountId",
-          "clientName",
-          "accountNumber",
-          "accountType",
-          "accountCategory",
-          last_transaction_date as "lastTransactionDate",
-          xummf_units,
-          xubf_units,
-          xudef_units,
-          xuref_units
-        FROM account_unit_balances
+          aub.account_id as "accountId",
+          aub."clientName",
+          aub."accountNumber",
+          aub."accountType",
+          aub."accountCategory",
+          aub.last_transaction_date as "lastTransactionDate",
+          aub.xummf_units,
+          aub.xubf_units,
+          aub.xudef_units,
+          aub.xuref_units,
+          COALESCE((
+            SELECT COUNT(*)
+            FROM goals g
+            WHERE g."accountId" = aub.account_id
+          ), 0) as "goalCount"
+        FROM account_unit_balances aub
         ${fullWhereClause}
         ${orderByClause}
         LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
@@ -225,6 +231,7 @@ export class UnitRegistryService {
           accountNumber: row.accountNumber,
           accountType: row.accountType,
           accountCategory: row.accountCategory,
+          goalCount: Number(row.goalCount) || 0,
           lastTransactionDate: row.lastTransactionDate,
           units,
           values,
@@ -236,11 +243,11 @@ export class UnitRegistryService {
       const summaryQuery = `
         SELECT
           COUNT(*) as total_accounts,
-          COALESCE(SUM(xummf_units), 0) as total_xummf_units,
-          COALESCE(SUM(xubf_units), 0) as total_xubf_units,
-          COALESCE(SUM(xudef_units), 0) as total_xudef_units,
-          COALESCE(SUM(xuref_units), 0) as total_xuref_units
-        FROM account_unit_balances
+          COALESCE(SUM(aub.xummf_units), 0) as total_xummf_units,
+          COALESCE(SUM(aub.xubf_units), 0) as total_xubf_units,
+          COALESCE(SUM(aub.xudef_units), 0) as total_xudef_units,
+          COALESCE(SUM(aub.xuref_units), 0) as total_xuref_units
+        FROM account_unit_balances aub
         ${fullWhereClause}
       `;
 
