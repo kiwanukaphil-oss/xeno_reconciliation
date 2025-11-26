@@ -93,4 +93,24 @@ router.get('/stats', async (_req: Request, res: Response) => {
   }
 });
 
+/**
+ * GET /api/unit-registry/accounts/:accountId/goals
+ * Get goal-level breakdown for a specific account
+ */
+router.get('/accounts/:accountId/goals', async (req: Request, res: Response): Promise<void> => {
+  try {
+    const { accountId } = req.params;
+
+    const goals = await UnitRegistryService.getAccountGoalBreakdown(accountId);
+
+    res.json(goals);
+  } catch (error: any) {
+    logger.error(`Error fetching goal breakdown for account ${req.params.accountId}:`, error);
+    res.status(500).json({
+      error: 'Failed to fetch goal breakdown',
+      message: error.message,
+    });
+  }
+});
+
 export default router;
