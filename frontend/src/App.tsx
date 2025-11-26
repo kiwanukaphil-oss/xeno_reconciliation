@@ -20,6 +20,7 @@ import { queryClient } from "./lib/queryClient";
 import Dashboard from "./components/Dashboard";
 import FundUpload from "./components/fund-upload/FundUpload";
 import GoalTransactions from "./components/transactions/GoalTransactions";
+import FundTransactions from "./components/transactions/FundTransactions";
 import ApprovalQueue from "./components/approval/ApprovalQueue";
 import { FundPrices } from "./components/fund-price/FundPrices";
 import { UnitRegistry } from "./components/unit-registry/UnitRegistry";
@@ -91,6 +92,8 @@ const App = () => {
         return <UnitRegistry />;
       case "goal-transactions":
         return <GoalTransactions />;
+      case "fund-transactions":
+        return <FundTransactions />;
       case "approval":
         return <ApprovalQueue />;
       default:

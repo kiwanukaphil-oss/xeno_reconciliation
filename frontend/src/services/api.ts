@@ -102,6 +102,11 @@ export const fetchFundTransactionDetails = async (id: string) => {
   return handleResponse(response);
 };
 
+export const fetchFundTransactionSummary = async (params: URLSearchParams) => {
+  const response = await fetch(`${API_URL}/api/fund-transactions/summary?${params}`);
+  return handleResponse(response);
+};
+
 // Master Data APIs
 export const fetchClients = async () => {
   const response = await fetch(`${API_URL}/api/clients`);
@@ -173,7 +178,8 @@ export const fetchUnitRegistry = async (
   limit: number = 100,
   offset: number = 0,
   accountType: string = "",
-  accountCategory: string = ""
+  accountCategory: string = "",
+  asOfDate: string = ""
 ) => {
   const params = new URLSearchParams();
   if (search) params.append("search", search);
@@ -182,9 +188,27 @@ export const fetchUnitRegistry = async (
   if (fundedThreshold !== 5000) params.append("fundedThreshold", fundedThreshold.toString());
   if (accountType) params.append("accountType", accountType);
   if (accountCategory) params.append("accountCategory", accountCategory);
+  if (asOfDate) params.append("asOfDate", asOfDate);
   params.append("limit", limit.toString());
   params.append("offset", offset.toString());
 
   const response = await fetch(`${API_URL}/api/unit-registry?${params}`);
+  return handleResponse(response);
+};
+
+export const fetchAccountGoalBreakdown = async (
+  accountId: string,
+  asOfDate: string = ""
+) => {
+  const params = new URLSearchParams();
+  if (asOfDate) params.append("asOfDate", asOfDate);
+
+  const response = await fetch(`${API_URL}/api/unit-registry/accounts/${accountId}/goals?${params}`);
+  return handleResponse(response);
+};
+
+// Dashboard APIs
+export const fetchDashboardMetrics = async () => {
+  const response = await fetch(`${API_URL}/api/dashboard/metrics`);
   return handleResponse(response);
 };

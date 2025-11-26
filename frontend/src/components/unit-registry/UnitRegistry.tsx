@@ -1,6 +1,6 @@
-import { useState, useEffect } from "react";
-import { ChevronLeft, ChevronRight } from "lucide-react";
-import { fetchUnitRegistry } from "../../services/api";
+import React, { useState, useEffect } from 'react';
+import { ChevronLeft, ChevronRight, ChevronDown, Loader2 } from 'lucide-react';
+import { fetchUnitRegistry, fetchAccountGoalBreakdown } from '../../services/api';
 
 interface Units {
   XUMMF: number;
@@ -17,11 +17,22 @@ interface Values {
 }
 
 interface UnitRegistryEntry {
+  accountId: string;
   clientName: string;
   accountNumber: string;
   accountType: string;
   accountCategory: string;
+  goalCount: number;
   lastTransactionDate: string | null;
+  units: Units;
+  values: Values;
+  totalValue: number;
+}
+
+interface GoalBalance {
+  goalId: string;
+  goalNumber: string;
+  goalTitle: string;
   units: Units;
   values: Values;
   totalValue: number;
@@ -37,6 +48,7 @@ interface Prices {
 interface Summary {
   totalClients: number;
   totalUnits: Units;
+  totalValues: Values;
   totalValue: number;
 }
 
@@ -54,22 +66,29 @@ export function UnitRegistry() {
   const [error, setError] = useState<string | null>(null);
 
   // Filters
-  const [search, setSearch] = useState("");
+  const [search, setSearch] = useState('');
   const [showOnlyFunded, setShowOnlyFunded] = useState(true);
   const [fundedThreshold] = useState(5000);
-  const [accountType, setAccountType] = useState("");
-  const [accountCategory, setAccountCategory] = useState("");
+  const [accountType, setAccountType] = useState('');
+  const [accountCategory, setAccountCategory] = useState('');
+  const [asOfDateFilter, setAsOfDateFilter] = useState('');
   const [sortColumn, setSortColumn] = useState<string | null>(null);
-  const [sortDirection, setSortDirection] = useState<"asc" | "desc">("asc");
+  const [sortDirection, setSortDirection] = useState<'asc' | 'desc'>('asc');
 
   // Pagination
-  const [limit, setLimit] = useState(100);
+  const limit = 100; // Fixed limit for pagination
   const [offset, setOffset] = useState(0);
   const [total, setTotal] = useState(0);
 
+  // Expandable rows for goal breakdown
+  const [expandedAccounts, setExpandedAccounts] = useState<Set<string>>(new Set());
+  const [goalBreakdowns, setGoalBreakdowns] = useState<Map<string, GoalBalance[]>>(new Map());
+  const [loadingGoals, setLoadingGoals] = useState<Set<string>>(new Set());
+  const [matchedGoalIds, setMatchedGoalIds] = useState<Array<{goalId: string; accountId: string}>>([]);
+
   useEffect(() => {
     loadRegistry();
-  }, [search, showOnlyFunded, accountType, accountCategory, offset]);
+  }, [search, showOnlyFunded, accountType, accountCategory, asOfDateFilter, offset]);
 
   const loadRegistry = async () => {
     try {
@@ -83,7 +102,8 @@ export function UnitRegistry() {
         limit,
         offset,
         accountType,
-        accountCategory
+        accountCategory,
+        asOfDateFilter
       );
 
       setEntries(data.entries || []);
@@ -91,19 +111,68 @@ export function UnitRegistry() {
       setPrices(data.prices);
       setSummary(data.summary);
       setTotal(data.total || 0);
+      setMatchedGoalIds(data.matchedGoalIds || []);
     } catch (err: any) {
-      setError(err.message || "Failed to load unit registry");
+      setError(err.message || 'Failed to load unit registry');
     } finally {
       setLoading(false);
     }
   };
 
+  // Auto-expand accounts with matching goals
+  useEffect(() => {
+    if (matchedGoalIds.length > 0 && entries.length > 0) {
+      const accountsToExpand = new Set(matchedGoalIds.map(m => m.accountId));
+      setExpandedAccounts(accountsToExpand);
+
+      // Pre-fetch goal breakdowns for matched accounts
+      accountsToExpand.forEach(accountId => {
+        fetchGoalBreakdown(accountId);
+      });
+    } else if (search === '') {
+      // Clear expansions when search is cleared
+      setExpandedAccounts(new Set());
+    }
+  }, [matchedGoalIds, entries]);
+
+  const toggleAccountExpansion = async (accountId: string) => {
+    const newExpanded = new Set(expandedAccounts);
+
+    if (newExpanded.has(accountId)) {
+      newExpanded.delete(accountId);
+    } else {
+      newExpanded.add(accountId);
+      if (!goalBreakdowns.has(accountId)) {
+        await fetchGoalBreakdown(accountId);
+      }
+    }
+
+    setExpandedAccounts(newExpanded);
+  };
+
+  const fetchGoalBreakdown = async (accountId: string) => {
+    setLoadingGoals(prev => new Set(prev).add(accountId));
+
+    try {
+      const goals = await fetchAccountGoalBreakdown(accountId, asOfDateFilter);
+      setGoalBreakdowns(prev => new Map(prev).set(accountId, goals));
+    } catch (err) {
+      console.error('Failed to fetch goal breakdown:', err);
+    } finally {
+      setLoadingGoals(prev => {
+        const next = new Set(prev);
+        next.delete(accountId);
+        return next;
+      });
+    }
+  };
+
   const handleSort = (column: string) => {
     if (sortColumn === column) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+      setSortDirection(sortDirection === 'asc' ? 'desc' : 'asc');
     } else {
       setSortColumn(column);
-      setSortDirection("asc");
+      setSortDirection('asc');
     }
   };
 
@@ -175,68 +244,70 @@ export function UnitRegistry() {
     let aVal: any;
     let bVal: any;
 
-    if (sortColumn === "clientName" || sortColumn === "accountNumber" || sortColumn === "accountType") {
+    if (
+      sortColumn === 'clientName' ||
+      sortColumn === 'accountNumber' ||
+      sortColumn === 'accountType'
+    ) {
       aVal = a[sortColumn as keyof UnitRegistryEntry];
       bVal = b[sortColumn as keyof UnitRegistryEntry];
-    } else if (sortColumn === "totalValue") {
+    } else if (sortColumn === 'totalValue') {
       aVal = a.totalValue;
       bVal = b.totalValue;
-    } else if (sortColumn.startsWith("units.")) {
-      const fund = sortColumn.split(".")[1] as keyof Units;
+    } else if (sortColumn.startsWith('units.')) {
+      const fund = sortColumn.split('.')[1] as keyof Units;
       aVal = a.units[fund];
       bVal = b.units[fund];
-    } else if (sortColumn.startsWith("values.")) {
-      const fund = sortColumn.split(".")[1] as keyof Values;
+    } else if (sortColumn.startsWith('values.')) {
+      const fund = sortColumn.split('.')[1] as keyof Values;
       aVal = a.values[fund];
       bVal = b.values[fund];
     }
 
-    if (typeof aVal === "string") {
-      return sortDirection === "asc"
-        ? aVal.localeCompare(bVal)
-        : bVal.localeCompare(aVal);
+    if (typeof aVal === 'string') {
+      return sortDirection === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
     } else {
-      return sortDirection === "asc" ? aVal - bVal : bVal - aVal;
+      return sortDirection === 'asc' ? aVal - bVal : bVal - aVal;
     }
   });
 
   const formatDate = (dateString: string | null) => {
-    if (!dateString) return "N/A";
-    return new Date(dateString).toLocaleDateString("en-US", {
-      year: "numeric",
-      month: "short",
-      day: "numeric",
+    if (!dateString) return 'N/A';
+    return new Date(dateString).toLocaleDateString('en-US', {
+      year: 'numeric',
+      month: 'short',
+      day: 'numeric',
     });
   };
 
   const formatNumber = (num: number, decimals: number = 2) => {
-    return num.toLocaleString("en-US", {
+    return num.toLocaleString('en-US', {
       minimumFractionDigits: decimals,
       maximumFractionDigits: decimals,
     });
   };
 
   const formatCurrency = (num: number) => {
-    return num.toLocaleString("en-US", {
+    return num.toLocaleString('en-US', {
       minimumFractionDigits: 0,
       maximumFractionDigits: 0,
     });
   };
 
   const formatName = (name: string) => {
-    if (!name) return "";
+    if (!name) return '';
     return name
       .toLowerCase()
-      .split(" ")
-      .map(word => word.charAt(0).toUpperCase() + word.slice(1))
-      .join(" ");
+      .split(' ')
+      .map((word) => word.charAt(0).toUpperCase() + word.slice(1))
+      .join(' ');
   };
 
   const SortIcon = ({ column }: { column: string }) => {
     if (sortColumn !== column) {
       return <span className="sort-icon">⇅</span>;
     }
-    return <span className="sort-icon">{sortDirection === "asc" ? "↑" : "↓"}</span>;
+    return <span className="sort-icon">{sortDirection === 'asc' ? '↑' : '↓'}</span>;
   };
 
   return (
@@ -245,11 +316,7 @@ export function UnitRegistry() {
         <div className="card-header">
           <div>
             <h2>Unit Registry</h2>
-            {asOfDate && (
-              <p className="as-of-date">
-                Prices as of {formatDate(asOfDate)}
-              </p>
-            )}
+            {asOfDate && <p className="as-of-date">Prices as of {formatDate(asOfDate)}</p>}
           </div>
         </div>
 
@@ -265,7 +332,9 @@ export function UnitRegistry() {
             />
           </div>
           <div className="filter-group">
-            <label htmlFor="accountType" className="filter-label">Account Type:</label>
+            <label htmlFor="accountType" className="filter-label">
+              Account Type:
+            </label>
             <select
               id="accountType"
               value={accountType}
@@ -283,7 +352,9 @@ export function UnitRegistry() {
             </select>
           </div>
           <div className="filter-group">
-            <label htmlFor="accountCategory" className="filter-label">Account Category:</label>
+            <label htmlFor="accountCategory" className="filter-label">
+              Account Category:
+            </label>
             <select
               id="accountCategory"
               value={accountCategory}
@@ -299,6 +370,34 @@ export function UnitRegistry() {
               <option value="INVESTMENT_CLUBS">Investment Clubs</option>
               <option value="RETIREMENTS_BENEFIT_SCHEME">Retirements Benefit Scheme</option>
             </select>
+          </div>
+          <div className="filter-group">
+            <label htmlFor="asOfDate" className="filter-label">
+              As of Date:
+            </label>
+            <input
+              id="asOfDate"
+              type="date"
+              value={asOfDateFilter}
+              onChange={(e) => {
+                setAsOfDateFilter(e.target.value);
+                setOffset(0); // Reset to first page when date changes
+              }}
+              className="filter-input"
+              placeholder="Select date..."
+            />
+            {asOfDateFilter && (
+              <button
+                onClick={() => {
+                  setAsOfDateFilter('');
+                  setOffset(0);
+                }}
+                className="clear-date-btn"
+                title="Clear date filter"
+              >
+                ✕
+              </button>
+            )}
           </div>
           <div className="filter-group">
             <label className="checkbox-label">
@@ -321,6 +420,54 @@ export function UnitRegistry() {
             </div>
           )}
 
+          {!loading && !error && summary && (
+            <div className="stats-grid">
+              <div className="stat-card stat-card-primary">
+                <div className="stat-label">Active Clients</div>
+                <div className="stat-value">{formatNumber(summary.totalClients, 0)}</div>
+                <div className="stat-subtitle">Total accounts</div>
+              </div>
+
+              <div className="stat-card stat-card-success">
+                <div className="stat-label">Total AUM</div>
+                <div className="stat-value">{formatCurrency(summary.totalValue)}</div>
+                <div className="stat-subtitle">All funds combined</div>
+              </div>
+
+              <div className="stat-card stat-card-fund">
+                <div className="stat-label">XUMMF</div>
+                <div className="stat-value">{formatCurrency(summary.totalValues.XUMMF)}</div>
+                <div className="stat-subtitle">
+                  {formatNumber(summary.totalUnits.XUMMF, 2)} units
+                </div>
+              </div>
+
+              <div className="stat-card stat-card-fund">
+                <div className="stat-label">XUBF</div>
+                <div className="stat-value">{formatCurrency(summary.totalValues.XUBF)}</div>
+                <div className="stat-subtitle">
+                  {formatNumber(summary.totalUnits.XUBF, 2)} units
+                </div>
+              </div>
+
+              <div className="stat-card stat-card-fund">
+                <div className="stat-label">XUDEF</div>
+                <div className="stat-value">{formatCurrency(summary.totalValues.XUDEF)}</div>
+                <div className="stat-subtitle">
+                  {formatNumber(summary.totalUnits.XUDEF, 2)} units
+                </div>
+              </div>
+
+              <div className="stat-card stat-card-fund">
+                <div className="stat-label">XUREF</div>
+                <div className="stat-value">{formatCurrency(summary.totalValues.XUREF)}</div>
+                <div className="stat-subtitle">
+                  {formatNumber(summary.totalUnits.XUREF, 2)} units
+                </div>
+              </div>
+            </div>
+          )}
+
           {!loading && !error && sortedEntries.length === 0 && (
             <div className="no-data">No client positions found</div>
           )}
@@ -331,73 +478,296 @@ export function UnitRegistry() {
                 <table className="registry-table">
                   <thead>
                     <tr>
-                      <th colSpan={2} className="group-header">Client Info</th>
-                      <th colSpan={4} className="group-header">Units Held</th>
-                      <th colSpan={4} className="group-header">Portfolio Value (UGX)</th>
-                      <th rowSpan={2} className="group-header total-header">Total Portfolio Value</th>
+                      <th colSpan={2} className="group-header">
+                        Client Info
+                      </th>
+                      <th colSpan={4} className="group-header">
+                        Units Held
+                      </th>
+                      <th colSpan={4} className="group-header">
+                        Portfolio Value (UGX)
+                      </th>
+                      <th rowSpan={2} className="group-header total-header">
+                        Total Portfolio Value
+                      </th>
                     </tr>
                     <tr>
-                      <th onClick={() => handleSort("clientName")} className="sortable">
+                      <th onClick={() => handleSort('clientName')} className="sortable">
                         Client Name <SortIcon column="clientName" />
                       </th>
-                      <th onClick={() => handleSort("accountNumber")} className="sortable">
+                      <th onClick={() => handleSort('accountNumber')} className="sortable">
                         Account Number <SortIcon column="accountNumber" />
                       </th>
-                      <th onClick={() => handleSort("units.XUMMF")} className="sortable right-align">
+                      <th
+                        onClick={() => handleSort('units.XUMMF')}
+                        className="sortable right-align"
+                      >
                         XUMMF <SortIcon column="units.XUMMF" />
                       </th>
-                      <th onClick={() => handleSort("units.XUBF")} className="sortable right-align">
+                      <th onClick={() => handleSort('units.XUBF')} className="sortable right-align">
                         XUBF <SortIcon column="units.XUBF" />
                       </th>
-                      <th onClick={() => handleSort("units.XUDEF")} className="sortable right-align">
+                      <th
+                        onClick={() => handleSort('units.XUDEF')}
+                        className="sortable right-align"
+                      >
                         XUDEF <SortIcon column="units.XUDEF" />
                       </th>
-                      <th onClick={() => handleSort("units.XUREF")} className="sortable right-align">
+                      <th
+                        onClick={() => handleSort('units.XUREF')}
+                        className="sortable right-align"
+                      >
                         XUREF <SortIcon column="units.XUREF" />
                       </th>
-                      <th onClick={() => handleSort("values.XUMMF")} className="sortable right-align">
+                      <th
+                        onClick={() => handleSort('values.XUMMF')}
+                        className="sortable right-align"
+                      >
                         XUMMF <SortIcon column="values.XUMMF" />
                       </th>
-                      <th onClick={() => handleSort("values.XUBF")} className="sortable right-align">
+                      <th
+                        onClick={() => handleSort('values.XUBF')}
+                        className="sortable right-align"
+                      >
                         XUBF <SortIcon column="values.XUBF" />
                       </th>
-                      <th onClick={() => handleSort("values.XUDEF")} className="sortable right-align">
+                      <th
+                        onClick={() => handleSort('values.XUDEF')}
+                        className="sortable right-align"
+                      >
                         XUDEF <SortIcon column="values.XUDEF" />
                       </th>
-                      <th onClick={() => handleSort("values.XUREF")} className="sortable right-align">
+                      <th
+                        onClick={() => handleSort('values.XUREF')}
+                        className="sortable right-align"
+                      >
                         XUREF <SortIcon column="values.XUREF" />
                       </th>
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedEntries.map((entry, idx) => (
-                      <tr key={`${entry.accountNumber}-${idx}`}>
-                        <td className="client-name">{formatName(entry.clientName)}</td>
-                        <td className="account-number">{entry.accountNumber}</td>
-                        <td className="right-align units">{formatNumber(entry.units.XUMMF, 4)}</td>
-                        <td className="right-align units">{formatNumber(entry.units.XUBF, 4)}</td>
-                        <td className="right-align units">{formatNumber(entry.units.XUDEF, 4)}</td>
-                        <td className="right-align units">{formatNumber(entry.units.XUREF, 4)}</td>
-                        <td className="right-align value">{formatCurrency(entry.values.XUMMF)}</td>
-                        <td className="right-align value">{formatCurrency(entry.values.XUBF)}</td>
-                        <td className="right-align value">{formatCurrency(entry.values.XUDEF)}</td>
-                        <td className="right-align value">{formatCurrency(entry.values.XUREF)}</td>
-                        <td className="right-align total-value">{formatCurrency(entry.totalValue)}</td>
-                      </tr>
-                    ))}
+                    {sortedEntries.map((entry, idx) => {
+                      const isExpanded = expandedAccounts.has(entry.accountId);
+                      const isHighlighted = matchedGoalIds.some(m => m.accountId === entry.accountId);
+                      const goals = goalBreakdowns.get(entry.accountId) || [];
+                      const isLoadingGoals = loadingGoals.has(entry.accountId);
+
+                      return (
+                        <React.Fragment key={entry.accountId}>
+                          <tr
+                            className={`account-row ${isExpanded ? 'expanded' : ''} ${isHighlighted ? 'highlighted' : ''}`}
+                            onClick={() => toggleAccountExpansion(entry.accountId)}
+                            style={{ cursor: 'pointer' }}
+                          >
+                            <td className="client-name">
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                <ChevronDown
+                                  style={{
+                                    width: '16px',
+                                    height: '16px',
+                                    transform: isExpanded ? 'rotate(0deg)' : 'rotate(-90deg)',
+                                    transition: 'transform 0.2s',
+                                    color: '#666'
+                                  }}
+                                />
+                                {formatName(entry.clientName)}
+                              </div>
+                            </td>
+                            <td className="account-number">
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                                {entry.accountNumber}
+                                {entry.goalCount > 0 && (
+                                  <span className="goal-count-badge">
+                                    {entry.goalCount} {entry.goalCount === 1 ? 'goal' : 'goals'}
+                                  </span>
+                                )}
+                              </div>
+                            </td>
+                            <td className="right-align units">{formatNumber(entry.units.XUMMF, 4)}</td>
+                            <td className="right-align units">{formatNumber(entry.units.XUBF, 4)}</td>
+                            <td className="right-align units">{formatNumber(entry.units.XUDEF, 4)}</td>
+                            <td className="right-align units">{formatNumber(entry.units.XUREF, 4)}</td>
+                            <td className="right-align value">{formatCurrency(entry.values.XUMMF)}</td>
+                            <td className="right-align value">{formatCurrency(entry.values.XUBF)}</td>
+                            <td className="right-align value">{formatCurrency(entry.values.XUDEF)}</td>
+                            <td className="right-align value">{formatCurrency(entry.values.XUREF)}</td>
+                            <td className="right-align total-value">
+                              {formatCurrency(entry.totalValue)}
+                            </td>
+                          </tr>
+
+                          {/* Expanded Goal Breakdown Row */}
+                          {isExpanded && (
+                            <tr className="goal-breakdown-row">
+                              <td colSpan={11} style={{ padding: 0, background: '#f8f9fa' }}>
+                                <div style={{ padding: '16px 24px' }}>
+                                  {isLoadingGoals ? (
+                                    <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', padding: '20px' }}>
+                                      <Loader2 style={{ width: '20px', height: '20px', marginRight: '8px', animation: 'spin 1s linear infinite' }} />
+                                      <span style={{ color: '#666', fontSize: '14px' }}>Loading goals...</span>
+                                    </div>
+                                  ) : goals.length === 0 ? (
+                                    <div style={{ textAlign: 'center', color: '#999', padding: '20px', fontSize: '14px' }}>
+                                      No goals found for this account
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <h4 style={{ margin: '0 0 12px 0', fontSize: '14px', fontWeight: '600', color: '#333' }}>
+                                        Goal Breakdown for {entry.accountNumber}
+                                      </h4>
+                                      <div style={{ overflowX: 'auto' }}>
+                                        <table style={{ width: '100%', fontSize: '12px', borderCollapse: 'collapse' }}>
+                                          <thead>
+                                            <tr style={{ background: '#e9ecef' }}>
+                                              <th style={{ padding: '8px', textAlign: 'left', borderBottom: '1px solid #dee2e6' }}>Goal</th>
+                                              <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>XUMMF Units</th>
+                                              <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>XUBF Units</th>
+                                              <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>XUDEF Units</th>
+                                              <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>XUREF Units</th>
+                                              <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>XUMMF Value</th>
+                                              <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>XUBF Value</th>
+                                              <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>XUDEF Value</th>
+                                              <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>XUREF Value</th>
+                                              <th style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6' }}>Total Value</th>
+                                            </tr>
+                                          </thead>
+                                          <tbody>
+                                            {goals.map((goal) => {
+                                              const isMatchedGoal = matchedGoalIds.some(m => m.goalId === goal.goalId);
+                                              return (
+                                                <tr
+                                                  key={goal.goalId}
+                                                  style={{
+                                                    background: isMatchedGoal ? '#fff3cd' : 'white',
+                                                    fontWeight: isMatchedGoal ? '600' : 'normal'
+                                                  }}
+                                                >
+                                                  <td style={{ padding: '8px', borderBottom: '1px solid #dee2e6' }}>
+                                                    <div style={{ fontWeight: '500', color: '#333' }}>{goal.goalTitle}</div>
+                                                    <div style={{ fontSize: '11px', color: '#666', fontFamily: 'Courier New, monospace' }}>
+                                                      {goal.goalNumber}
+                                                    </div>
+                                                  </td>
+                                                  <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontFamily: 'Courier New, monospace' }}>
+                                                    {formatNumber(goal.units.XUMMF, 2)}
+                                                  </td>
+                                                  <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontFamily: 'Courier New, monospace' }}>
+                                                    {formatNumber(goal.units.XUBF, 2)}
+                                                  </td>
+                                                  <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontFamily: 'Courier New, monospace' }}>
+                                                    {formatNumber(goal.units.XUDEF, 2)}
+                                                  </td>
+                                                  <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontFamily: 'Courier New, monospace' }}>
+                                                    {formatNumber(goal.units.XUREF, 2)}
+                                                  </td>
+                                                  <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontFamily: 'Courier New, monospace', color: '#0c5460' }}>
+                                                    {formatCurrency(goal.values.XUMMF)}
+                                                  </td>
+                                                  <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontFamily: 'Courier New, monospace', color: '#0c5460' }}>
+                                                    {formatCurrency(goal.values.XUBF)}
+                                                  </td>
+                                                  <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontFamily: 'Courier New, monospace', color: '#0c5460' }}>
+                                                    {formatCurrency(goal.values.XUDEF)}
+                                                  </td>
+                                                  <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontFamily: 'Courier New, monospace', color: '#0c5460' }}>
+                                                    {formatCurrency(goal.values.XUREF)}
+                                                  </td>
+                                                  <td style={{ padding: '8px', textAlign: 'right', borderBottom: '1px solid #dee2e6', fontFamily: 'Courier New, monospace', fontWeight: '600', color: '#155724' }}>
+                                                    {formatCurrency(goal.totalValue)}
+                                                  </td>
+                                                </tr>
+                                              );
+                                            })}
+                                          </tbody>
+                                          <tfoot>
+                                            <tr style={{ background: '#d4edda', borderTop: '2px solid #333' }}>
+                                              <td style={{ padding: '10px 8px', fontWeight: '700', fontSize: '13px' }}>
+                                                Total ({goals.length} {goals.length === 1 ? 'goal' : 'goals'})
+                                              </td>
+                                              <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: 'Courier New, monospace', fontWeight: '600', fontSize: '12px' }}>
+                                                {formatNumber(goals.reduce((sum, g) => sum + g.units.XUMMF, 0), 2)}
+                                              </td>
+                                              <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: 'Courier New, monospace', fontWeight: '600', fontSize: '12px' }}>
+                                                {formatNumber(goals.reduce((sum, g) => sum + g.units.XUBF, 0), 2)}
+                                              </td>
+                                              <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: 'Courier New, monospace', fontWeight: '600', fontSize: '12px' }}>
+                                                {formatNumber(goals.reduce((sum, g) => sum + g.units.XUDEF, 0), 2)}
+                                              </td>
+                                              <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: 'Courier New, monospace', fontWeight: '600', fontSize: '12px' }}>
+                                                {formatNumber(goals.reduce((sum, g) => sum + g.units.XUREF, 0), 2)}
+                                              </td>
+                                              <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: 'Courier New, monospace', fontWeight: '600', fontSize: '12px', color: '#0c5460' }}>
+                                                {formatCurrency(goals.reduce((sum, g) => sum + g.values.XUMMF, 0))}
+                                              </td>
+                                              <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: 'Courier New, monospace', fontWeight: '600', fontSize: '12px', color: '#0c5460' }}>
+                                                {formatCurrency(goals.reduce((sum, g) => sum + g.values.XUBF, 0))}
+                                              </td>
+                                              <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: 'Courier New, monospace', fontWeight: '600', fontSize: '12px', color: '#0c5460' }}>
+                                                {formatCurrency(goals.reduce((sum, g) => sum + g.values.XUDEF, 0))}
+                                              </td>
+                                              <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: 'Courier New, monospace', fontWeight: '600', fontSize: '12px', color: '#0c5460' }}>
+                                                {formatCurrency(goals.reduce((sum, g) => sum + g.values.XUREF, 0))}
+                                              </td>
+                                              <td style={{ padding: '10px 8px', textAlign: 'right', fontFamily: 'Courier New, monospace', fontWeight: '700', fontSize: '13px', color: '#155724' }}>
+                                                {formatCurrency(goals.reduce((sum, g) => sum + g.totalValue, 0))}
+                                              </td>
+                                            </tr>
+                                          </tfoot>
+                                        </table>
+                                      </div>
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          )}
+                        </React.Fragment>
+                      );
+                    })}
                   </tbody>
                   {summary && (
                     <tfoot>
                       <tr className="summary-row">
                         <td colSpan={2} className="summary-label">
-                          <strong>Total ({summary.totalClients} clients)</strong>
+                          <strong>Total Units ({summary.totalClients} clients)</strong>
                         </td>
-                        <td className="right-align"><strong>{formatNumber(summary.totalUnits.XUMMF, 4)}</strong></td>
-                        <td className="right-align"><strong>{formatNumber(summary.totalUnits.XUBF, 4)}</strong></td>
-                        <td className="right-align"><strong>{formatNumber(summary.totalUnits.XUDEF, 4)}</strong></td>
-                        <td className="right-align"><strong>{formatNumber(summary.totalUnits.XUREF, 4)}</strong></td>
+                        <td className="right-align">
+                          <strong>{formatNumber(summary.totalUnits.XUMMF, 4)}</strong>
+                        </td>
+                        <td className="right-align">
+                          <strong>{formatNumber(summary.totalUnits.XUBF, 4)}</strong>
+                        </td>
+                        <td className="right-align">
+                          <strong>{formatNumber(summary.totalUnits.XUDEF, 4)}</strong>
+                        </td>
+                        <td className="right-align">
+                          <strong>{formatNumber(summary.totalUnits.XUREF, 4)}</strong>
+                        </td>
                         <td colSpan={4} className="summary-spacer"></td>
-                        <td className="right-align total-summary"><strong>{formatCurrency(summary.totalValue)}</strong></td>
+                        <td className="right-align">
+                          <strong>{formatCurrency(summary.totalValue)}</strong>
+                        </td>
+                      </tr>
+                      <tr className="summary-values-row">
+                        <td colSpan={2} className="summary-label">
+                          <strong>Total Portfolio Value</strong>
+                        </td>
+                        <td colSpan={4} className="summary-spacer"></td>
+                        <td className="right-align">
+                          <strong>{formatCurrency(summary.totalValues.XUMMF)}</strong>
+                        </td>
+                        <td className="right-align">
+                          <strong>{formatCurrency(summary.totalValues.XUBF)}</strong>
+                        </td>
+                        <td className="right-align">
+                          <strong>{formatCurrency(summary.totalValues.XUDEF)}</strong>
+                        </td>
+                        <td className="right-align">
+                          <strong>{formatCurrency(summary.totalValues.XUREF)}</strong>
+                        </td>
+                        <td className="right-align total-summary">
+                          <strong>{formatCurrency(summary.totalValue)}</strong>
+                        </td>
                       </tr>
                     </tfoot>
                   )}
@@ -426,7 +796,7 @@ export function UnitRegistry() {
                     </button>
 
                     {/* Page number buttons */}
-                    {getPageNumbers().map((pageNum, index) => (
+                    {getPageNumbers().map((pageNum, index) =>
                       pageNum === '...' ? (
                         <span key={`ellipsis-${index}`} className="pagination-ellipsis">
                           ...
@@ -436,15 +806,13 @@ export function UnitRegistry() {
                           key={`page-${pageNum}`}
                           onClick={() => handleGoToPage(pageNum as number)}
                           className={`pagination-btn ${
-                            Math.floor(offset / limit) + 1 === pageNum
-                              ? 'pagination-active'
-                              : ''
+                            Math.floor(offset / limit) + 1 === pageNum ? 'pagination-active' : ''
                           }`}
                         >
                           {pageNum}
                         </button>
                       )
-                    ))}
+                    )}
 
                     {/* Next button */}
                     <button
@@ -487,10 +855,10 @@ export function UnitRegistry() {
                 <div className="price-info">
                   <h4>Current Mid Prices:</h4>
                   <div className="price-grid">
-                    <span>XUMMF: {prices.XUMMF ? formatNumber(prices.XUMMF, 4) : "N/A"}</span>
-                    <span>XUBF: {prices.XUBF ? formatNumber(prices.XUBF, 4) : "N/A"}</span>
-                    <span>XUDEF: {prices.XUDEF ? formatNumber(prices.XUDEF, 4) : "N/A"}</span>
-                    <span>XUREF: {prices.XUREF ? formatNumber(prices.XUREF, 4) : "N/A"}</span>
+                    <span>XUMMF: {prices.XUMMF ? formatNumber(prices.XUMMF, 4) : 'N/A'}</span>
+                    <span>XUBF: {prices.XUBF ? formatNumber(prices.XUBF, 4) : 'N/A'}</span>
+                    <span>XUDEF: {prices.XUDEF ? formatNumber(prices.XUDEF, 4) : 'N/A'}</span>
+                    <span>XUREF: {prices.XUREF ? formatNumber(prices.XUREF, 4) : 'N/A'}</span>
                   </div>
                 </div>
               )}
@@ -516,6 +884,66 @@ export function UnitRegistry() {
         .card-header {
           padding: 20px;
           border-bottom: 1px solid #e0e0e0;
+        }
+
+        .stats-grid {
+          display: grid;
+          grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+          gap: 16px;
+          margin-bottom: 24px;
+          padding: 0 4px;
+        }
+
+        .stat-card {
+          background: white;
+          border-radius: 8px;
+          padding: 20px;
+          box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+          border-left: 4px solid #3b82f6;
+          transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        .stat-card:hover {
+          transform: translateY(-2px);
+          box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+
+        .stat-card-primary {
+          border-left-color: #3b82f6;
+          background: linear-gradient(135deg, #ffffff 0%, #eff6ff 100%);
+        }
+
+        .stat-card-success {
+          border-left-color: #10b981;
+          background: linear-gradient(135deg, #ffffff 0%, #ecfdf5 100%);
+        }
+
+        .stat-card-fund {
+          border-left-color: #8b5cf6;
+          background: linear-gradient(135deg, #ffffff 0%, #f5f3ff 100%);
+        }
+
+        .stat-label {
+          font-size: 13px;
+          font-weight: 600;
+          color: #6b7280;
+          text-transform: uppercase;
+          letter-spacing: 0.5px;
+          margin-bottom: 8px;
+        }
+
+        .stat-value {
+          font-size: 24px;
+          font-weight: 700;
+          color: #111827;
+          margin-bottom: 4px;
+          font-family: 'Courier New', monospace;
+        }
+
+        .stat-subtitle {
+          font-size: 12px;
+          color: #9ca3af;
+          font-weight: 500;
         }
 
         .card-header h2 {
@@ -700,6 +1128,15 @@ export function UnitRegistry() {
           padding: 12px 8px;
         }
 
+        .summary-values-row {
+          background-color: #d4edda !important;
+        }
+
+        .summary-values-row td {
+          padding: 12px 8px;
+          font-weight: 600;
+        }
+
         .summary-label {
           font-size: 14px;
         }
@@ -851,6 +1288,91 @@ export function UnitRegistry() {
           font-family: 'Courier New', monospace;
           font-size: 13px;
           color: #333;
+        }
+
+        .goal-count-badge {
+          display: inline-flex;
+          align-items: center;
+          padding: 2px 8px;
+          background-color: #e3f2fd;
+          color: #1976d2;
+          border-radius: 12px;
+          font-size: 11px;
+          font-weight: 600;
+          margin-left: 8px;
+        }
+
+        .account-row.expanded {
+          background-color: #f0f7ff;
+        }
+
+        .account-row.highlighted {
+          background-color: #fff3cd;
+        }
+
+        .goal-breakdown-row {
+          background-color: #f8f9fa;
+        }
+
+        .goal-breakdown-row td {
+          padding: 0;
+        }
+
+        .goal-breakdown-table {
+          width: 100%;
+          margin: 10px 0;
+          border-collapse: collapse;
+        }
+
+        .goal-breakdown-table th {
+          background-color: #e9ecef;
+          padding: 8px;
+          font-size: 11px;
+          font-weight: 600;
+          text-align: left;
+          color: #495057;
+          border-bottom: 2px solid #dee2e6;
+        }
+
+        .goal-breakdown-table td {
+          padding: 8px;
+          font-size: 12px;
+          border-bottom: 1px solid #dee2e6;
+        }
+
+        .goal-breakdown-table tr:hover {
+          background-color: #f0f0f0;
+        }
+
+        .goal-breakdown-table .goal-info {
+          font-weight: 500;
+        }
+
+        .goal-breakdown-table .goal-number {
+          font-family: 'Courier New', monospace;
+          font-size: 11px;
+          color: #666;
+        }
+
+        .loading-goals {
+          display: flex;
+          align-items: center;
+          justify-content: center;
+          padding: 20px;
+          color: #666;
+        }
+
+        @keyframes spin {
+          from {
+            transform: rotate(0deg);
+          }
+          to {
+            transform: rotate(360deg);
+          }
+        }
+
+        .spinner {
+          animation: spin 1s linear infinite;
         }
       `}</style>
     </div>
