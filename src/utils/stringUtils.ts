@@ -77,7 +77,7 @@ export class StringUtils {
    */
   static sanitizeFilename(value: string): string {
     return value
-      .replace(/[^a-z0-9_\-\.]/gi, '_')
+      .replace(/[^a-z0-9_\-.]/gi, '_')
       .replace(/_{2,}/g, '_')
       .toLowerCase();
   }
