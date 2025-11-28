@@ -44,3 +44,7 @@ temp/
 # Reference documents (large Excel files)
 Reference Docs/
 NUL
+
+# Database backups
+*.dump
+*.sql.backup

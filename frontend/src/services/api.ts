@@ -212,3 +212,68 @@ export const fetchDashboardMetrics = async () => {
   const response = await fetch(`${API_URL}/api/dashboard/metrics`);
   return handleResponse(response);
 };
+
+// Bank Reconciliation APIs
+export const uploadBankFile = async (file: File, uploadedBy: string, metadata?: any) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("uploadedBy", uploadedBy);
+  if (metadata) {
+    formData.append("metadata", JSON.stringify(metadata));
+  }
+
+  const response = await fetch(`${API_URL}/api/bank-reconciliation/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  return handleResponse(response);
+};
+
+export const getAllBankBatches = async (limit: number = 50, offset: number = 0) => {
+  const response = await fetch(`${API_URL}/api/bank-reconciliation/batches?limit=${limit}&offset=${offset}`);
+  return handleResponse(response);
+};
+
+export const getBankBatchSummary = async (batchId: string) => {
+  const response = await fetch(`${API_URL}/api/bank-reconciliation/batches/${batchId}/summary`);
+  return handleResponse(response);
+};
+
+export const getBankReconciliationReport = async (batchId: string) => {
+  const response = await fetch(`${API_URL}/api/bank-reconciliation/batches/${batchId}/report`);
+  return handleResponse(response);
+};
+
+export const getReconciliationVariances = async (
+  limit: number = 50,
+  offset: number = 0,
+  severity?: string,
+  status?: string
+) => {
+  const params = new URLSearchParams();
+  params.append("limit", limit.toString());
+  params.append("offset", offset.toString());
+  if (severity) params.append("severity", severity);
+  if (status) params.append("status", status);
+
+  const response = await fetch(`${API_URL}/api/bank-reconciliation/variances?${params}`);
+  return handleResponse(response);
+};
+
+export const resolveVariance = async (
+  varianceId: string,
+  resolutionStatus: string,
+  resolutionNotes: string,
+  resolvedBy: string
+) => {
+  const response = await fetch(`${API_URL}/api/bank-reconciliation/variances/${varianceId}/resolve`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      resolutionStatus,
+      resolutionNotes,
+      resolvedBy,
+    }),
+  });
+  return handleResponse(response);
+};

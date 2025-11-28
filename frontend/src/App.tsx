@@ -11,6 +11,8 @@ import {
   Users,
   DollarSign,
   Wallet,
+  GitCompare,
+  AlertTriangle,
 } from "lucide-react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
@@ -24,6 +26,8 @@ import FundTransactions from "./components/transactions/FundTransactions";
 import ApprovalQueue from "./components/approval/ApprovalQueue";
 import { FundPrices } from "./components/fund-price/FundPrices";
 import { UnitRegistry } from "./components/unit-registry/UnitRegistry";
+import BankReconciliation from "./components/reconciliation/BankReconciliation";
+import VarianceReview from "./components/reconciliation/VarianceReview";
 
 const App = () => {
   const [activeModule, setActiveModule] = useState("dashboard");
@@ -41,6 +45,18 @@ const App = () => {
       name: "Fund Upload",
       icon: Upload,
       description: "Upload CSV/Excel files",
+    },
+    {
+      id: "bank-reconciliation",
+      name: "Bank Reconciliation",
+      icon: GitCompare,
+      description: "Reconcile bank transactions with fund system",
+    },
+    {
+      id: "variance-review",
+      name: "Variance Review",
+      icon: AlertTriangle,
+      description: "Review and resolve variances",
     },
     {
       id: "fund-prices",
@@ -86,6 +102,10 @@ const App = () => {
         return <Dashboard />;
       case "upload":
         return <FundUpload />;
+      case "bank-reconciliation":
+        return <BankReconciliation />;
+      case "variance-review":
+        return <VarianceReview />;
       case "fund-prices":
         return <FundPrices />;
       case "unit-registry":

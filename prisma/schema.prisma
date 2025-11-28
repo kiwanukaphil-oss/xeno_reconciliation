@@ -24,8 +24,9 @@ model Client {
   updatedAt  DateTime @updatedAt
 
   // Relations
-  accounts         Account[]
-  fundTransactions FundTransaction[]
+  accounts            Account[]
+  fundTransactions    FundTransaction[]
+  bankGoalTransactions BankGoalTransaction[]
 
   @@index([clientName])
   @@index([status])
@@ -47,9 +48,10 @@ model Account {
   updatedAt       DateTime @updatedAt
 
   // Relations
-  client           Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
-  goals            Goal[]
-  fundTransactions FundTransaction[]
+  client               Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  goals                Goal[]
+  fundTransactions     FundTransaction[]
+  bankGoalTransactions BankGoalTransaction[]
 
   @@index([clientId])
   @@index([accountNumber])
@@ -78,8 +80,9 @@ model Goal {
   updatedAt        DateTime @updatedAt
 
   // Relations
-  account          Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
-  fundTransactions FundTransaction[]
+  account              Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  fundTransactions     FundTransaction[]
+  bankGoalTransactions BankGoalTransaction[]
 
   @@index([accountId])
   @@index([goalNumber])
@@ -321,6 +324,183 @@ model ValidationRule {
 }
 
 // ============================================================================
+// BANK RECONCILIATION
+// ============================================================================
+
+model BankUploadBatch {
+  id                  String   @id @default(uuid())
+  batchNumber         String   @unique // Auto-generated: BANK-BATCH-YYYYMMDD-XXXXX
+  fileName            String
+  fileSize            BigInt
+  filePath            String
+
+  // Processing Status
+  processingStatus    ProcessingStatus @default(QUEUED)
+  validationStatus    ValidationStatus @default(PENDING)
+
+  // Statistics
+  totalRecords        Int      @default(0)
+  processedRecords    Int      @default(0)
+  failedRecords       Int      @default(0)
+
+  // Reconciliation Summary
+  totalMatched        Int      @default(0)
+  totalUnmatched      Int      @default(0)
+  totalVariances      Int      @default(0)
+  autoApprovedCount   Int      @default(0)
+  manualReviewCount   Int      @default(0)
+
+  // Financial Summary
+  totalAmount         Decimal  @default(0) @db.Decimal(18, 2)
+  varianceAmount      Decimal  @default(0) @db.Decimal(18, 2)
+
+  // Validation Results
+  validationErrors    Json?    // Array of error objects
+  validationWarnings  Json?    // Array of warning objects
+
+  // Timestamps
+  uploadedAt          DateTime @default(now())
+  processingStartedAt DateTime?
+  processingCompletedAt DateTime?
+
+  // User Tracking
+  uploadedBy          String
+  approvedBy          String?
+  approvedAt          DateTime?
+
+  // Metadata: { period, source, notes, etc. }
+  metadata            Json?
+
+  // Relations
+  bankGoalTransactions BankGoalTransaction[]
+
+  @@index([processingStatus])
+  @@index([validationStatus])
+  @@index([uploadedAt])
+  @@index([uploadedBy])
+  @@map("bank_upload_batches")
+}
+
+model BankGoalTransaction {
+  id                  String   @id @default(uuid())
+
+  // Foreign Keys
+  clientId            String
+  accountId           String
+  goalId              String
+  uploadBatchId       String
+
+  // Transaction Details
+  transactionDate     DateTime @db.Date
+  transactionType     TransactionType
+  transactionId       String   // Bank transaction ID
+
+  // Client Information (from CSV)
+  firstName           String
+  lastName            String
+  goalTitle           String
+
+  // Goal Transaction Data
+  goalNumber          String   // For matching
+  totalAmount         Decimal  @db.Decimal(18, 2)
+
+  // Fund Distribution Percentages
+  xummfPercentage     Decimal  @db.Decimal(5, 4) // e.g., 0.4000 for 40%
+  xubfPercentage      Decimal  @db.Decimal(5, 4)
+  xudefPercentage     Decimal  @db.Decimal(5, 4)
+  xurefPercentage     Decimal  @db.Decimal(5, 4)
+
+  // Fund Distribution Amounts
+  xummfAmount         Decimal  @db.Decimal(18, 2)
+  xubfAmount          Decimal  @db.Decimal(18, 2)
+  xudefAmount         Decimal  @db.Decimal(18, 2)
+  xurefAmount         Decimal  @db.Decimal(18, 2)
+
+  // Reconciliation Status
+  reconciliationStatus ReconciliationStatus @default(PENDING)
+  matchedGoalTransactionCode String?  // goalTransactionCode from FundTransaction if matched
+
+  // Matching Metadata
+  matchedAt           DateTime?
+  matchScore          Int?     // Confidence score (0-100)
+
+  // Audit Fields
+  rowNumber           Int      // Original CSV row number
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+
+  // Relations
+  client              Client @relation(fields: [clientId], references: [id], onDelete: Restrict)
+  account             Account @relation(fields: [accountId], references: [id], onDelete: Restrict)
+  goal                Goal @relation(fields: [goalId], references: [id], onDelete: Restrict)
+  uploadBatch         BankUploadBatch @relation(fields: [uploadBatchId], references: [id], onDelete: Restrict)
+  variances           ReconciliationVariance[]
+
+  @@unique([uploadBatchId, rowNumber]) // Prevent duplicate rows from same upload
+  @@index([reconciliationStatus])
+  @@index([transactionDate])
+  @@index([clientId])
+  @@index([accountId])
+  @@index([goalId])
+  @@index([goalNumber])
+  @@index([transactionId])
+  @@index([matchedGoalTransactionCode])
+  @@index([goalNumber, transactionId, totalAmount]) // Composite index for matching
+  @@map("bank_goal_transactions")
+}
+
+model ReconciliationVariance {
+  id                      String   @id @default(uuid())
+  bankGoalTransactionId   String
+
+  // Variance Details
+  varianceType            VarianceType
+  varianceSeverity        VarianceSeverity
+  description             String   @db.Text
+
+  // Amounts
+  expectedValue           Decimal? @db.Decimal(18, 2)
+  actualValue             Decimal? @db.Decimal(18, 2)
+  differenceAmount        Decimal? @db.Decimal(18, 2)
+  differencePercentage    Decimal? @db.Decimal(5, 2)
+
+  // Fund-specific variance (if applicable)
+  fundCode                String?
+  fundExpectedAmount      Decimal? @db.Decimal(18, 2)
+  fundActualAmount        Decimal? @db.Decimal(18, 2)
+
+  // Date variance (if applicable)
+  expectedDate            DateTime? @db.Date
+  actualDate              DateTime? @db.Date
+  dateDifferenceDays      Int?
+
+  // Resolution
+  resolutionStatus        VarianceResolutionStatus @default(PENDING)
+  resolutionNotes         String?  @db.Text
+  resolvedBy              String?
+  resolvedAt              DateTime?
+
+  // Auto-approval
+  autoApproved            Boolean  @default(false)
+  autoApprovalReason      String?
+
+  // Audit
+  detectedAt              DateTime @default(now())
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  // Relations
+  bankGoalTransaction     BankGoalTransaction @relation(fields: [bankGoalTransactionId], references: [id], onDelete: Cascade)
+
+  @@index([varianceType])
+  @@index([varianceSeverity])
+  @@index([resolutionStatus])
+  @@index([bankGoalTransactionId])
+  @@index([fundCode])
+  @@map("reconciliation_variances")
+}
+
+// ============================================================================
 // ENUMS
 // ============================================================================
 
@@ -451,4 +631,40 @@ enum TransactionSource {
   BANK
   MTN_MOMO
   AIRTEL_MONEY
+}
+
+enum ReconciliationStatus {
+  PENDING           // Awaiting matching
+  MATCHED           // Matched with fund transaction
+  VARIANCE_DETECTED // Matched but has variances
+  AUTO_APPROVED     // Variances auto-approved
+  MANUAL_REVIEW     // Requires manual review
+  APPROVED          // Manually approved
+  REJECTED          // Rejected/disputed
+  MISSING_IN_FUND   // No matching fund transaction found
+}
+
+enum VarianceType {
+  TOTAL_AMOUNT      // Total amount mismatch
+  FUND_DISTRIBUTION // Fund distribution percentage mismatch
+  FUND_AMOUNT       // Individual fund amount mismatch
+  DATE_DIFFERENCE   // Transaction date difference
+  MISSING_IN_BANK   // Present in fund system but not in bank
+  MISSING_IN_FUND   // Present in bank but not in fund system
+}
+
+enum VarianceSeverity {
+  LOW      // < 1,000 UGX
+  MEDIUM   // 1,000 - 10,000 UGX
+  HIGH     // 10,000 - 50,000 UGX
+  CRITICAL // > 50,000 UGX
+}
+
+enum VarianceResolutionStatus {
+  PENDING           // Awaiting resolution
+  AUTO_APPROVED     // Auto-approved within tolerance
+  APPROVED          // Manually approved
+  REJECTED          // Rejected as error
+  INVESTIGATING     // Under investigation
+  RESOLVED          // Resolved/explained
 }

@@ -65,7 +65,8 @@
       "Bash(xargs -I {} powershell -Command \"Stop-Process -Id {} -Force -ErrorAction SilentlyContinue\")",
       "Bash(ping:*)",
       "Bash(del NUL 2)",
-      "Bash(.gitignore)"
+      "Bash(.gitignore)",
+      "Bash(SET PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1)"
     ],
     "deny": [],
     "ask": []
