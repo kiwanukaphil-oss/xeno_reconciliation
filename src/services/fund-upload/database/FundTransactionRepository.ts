@@ -55,6 +55,8 @@ export class FundTransactionRepository {
     const createData = resolvedTransactions.map((txn) => ({
       fundTransactionId: txn.fundTransactionId,
       goalTransactionCode: txn.goalTransactionCode,
+      transactionId: txn.transactionId,
+      source: txn.source as any,
       clientId: txn.clientId,
       accountId: txn.accountId,
       goalId: txn.goalId,

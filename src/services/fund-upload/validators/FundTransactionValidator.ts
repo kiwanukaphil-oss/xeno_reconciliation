@@ -7,6 +7,7 @@ import {
   ParsedFundTransaction,
   TransactionValidationError,
 } from '../../../types/fundTransaction';
+import { TRANSACTION_SOURCES, isValidTransactionSource, getInvalidSourceMessage } from '../../../constants/transactionSources';
 
 /**
  * Validates individual fund transactions
@@ -20,6 +21,9 @@ export class FundTransactionValidator {
 
     // Required field validation
     errors.push(...this.validateRequiredFields(transaction));
+
+    // Source tracking validation
+    errors.push(...this.validateSourceTracking(transaction));
 
     // Date validation
     errors.push(...this.validateDates(transaction));
@@ -133,6 +137,53 @@ export class FundTransactionValidator {
         message: 'Goal number is required',
         severity: 'CRITICAL',
         suggestedAction: 'Ensure the goalNumber field is not empty',
+      });
+    }
+
+    return errors;
+  }
+
+  /**
+   * Validates source tracking fields (transactionId and source)
+   */
+  private static validateSourceTracking(
+    transaction: ParsedFundTransaction
+  ): TransactionValidationError[] {
+    const errors: TransactionValidationError[] = [];
+    const rowNumber = transaction.rowNumber;
+
+    // Validate transactionId
+    if (StringUtils.isEmpty(transaction.transactionId)) {
+      errors.push({
+        rowNumber,
+        field: 'transactionId',
+        errorCode: 'REQUIRED_TRANSACTION_ID',
+        message: 'Transaction ID from source statement is required',
+        severity: 'CRITICAL',
+        suggestedAction: 'Ensure the transactionId field is not empty',
+      });
+    }
+
+    // Validate source
+    if (StringUtils.isEmpty(transaction.source)) {
+      errors.push({
+        rowNumber,
+        field: 'source',
+        errorCode: 'REQUIRED_SOURCE',
+        message: 'Transaction source/channel is required',
+        severity: 'CRITICAL',
+        suggestedAction: 'Ensure the source field is not empty',
+      });
+    } else if (!isValidTransactionSource(transaction.source)) {
+      // Validate source is one of the allowed values
+      errors.push({
+        rowNumber,
+        field: 'source',
+        errorCode: 'INVALID_SOURCE',
+        message: getInvalidSourceMessage(transaction.source),
+        severity: 'CRITICAL',
+        suggestedAction: `Source must be one of: ${TRANSACTION_SOURCES.join(', ')}`,
+        value: transaction.source,
       });
     }
 

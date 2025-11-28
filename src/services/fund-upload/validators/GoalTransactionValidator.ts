@@ -111,6 +111,38 @@ export class GoalTransactionValidator {
       });
     }
 
+    // Validation 4.1: Consistency - All transactions must have same transactionId
+    const uniqueTransactionIds = new Set(transactions.map((t) => t.transactionId));
+    if (uniqueTransactionIds.size > 1) {
+      errors.push({
+        rowNumber: first.rowNumber,
+        errorCode: 'GOAL_TRANSACTION_SAME_TRANSACTION_ID',
+        message: `Goal transaction ${goalTransactionCode} has multiple transaction IDs: ${Array.from(
+          uniqueTransactionIds
+        ).join(', ')}`,
+        severity: 'CRITICAL',
+        suggestedAction:
+          'All fund transactions in a goal transaction must have the same transaction ID from the source statement',
+        value: { goalTransactionCode, transactionIds: Array.from(uniqueTransactionIds), rows: rowNumbers },
+      });
+    }
+
+    // Validation 4.2: Consistency - All transactions must have same source
+    const uniqueSources = new Set(transactions.map((t) => t.source));
+    if (uniqueSources.size > 1) {
+      errors.push({
+        rowNumber: first.rowNumber,
+        errorCode: 'GOAL_TRANSACTION_SAME_SOURCE',
+        message: `Goal transaction ${goalTransactionCode} has multiple sources: ${Array.from(
+          uniqueSources
+        ).join(', ')}`,
+        severity: 'CRITICAL',
+        suggestedAction:
+          'All fund transactions in a goal transaction must have the same transaction source/channel',
+        value: { goalTransactionCode, sources: Array.from(uniqueSources), rows: rowNumbers },
+      });
+    }
+
     // Validation 5: Completeness - Check expected fund count (warning if not 4)
     const expectedFundCount = 4;
     if (transactions.length !== expectedFundCount) {

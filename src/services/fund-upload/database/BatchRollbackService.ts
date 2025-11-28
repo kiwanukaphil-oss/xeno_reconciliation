@@ -1,6 +1,6 @@
 import { prisma } from '../../../config/database';
 import { logger } from '../../../config/logger';
-import { GoalTransactionService } from '../../reporting/GoalTransactionService';
+import { MaterializedViewService } from '../../unit-registry/MaterializedViewService';
 
 /**
  * Service for rolling back upload batches
@@ -123,13 +123,17 @@ export class BatchRollbackService {
       });
       logger.info(`Deleted upload batch ${batch.batchNumber}`);
 
-      // Step 8: Refresh materialized view
-      logger.info('Refreshing materialized view after rollback');
+      // Step 8: Refresh all materialized views
+      logger.info('Refreshing all materialized views after rollback');
       try {
-        await GoalTransactionService.refreshMaterializedView();
-        logger.info('Materialized view refreshed successfully');
+        const result = await MaterializedViewService.refreshAllViews();
+        if (result.success) {
+          logger.info(`All materialized views refreshed successfully: ${result.refreshed.join(', ')}`);
+        } else {
+          logger.warn(`Some materialized views failed to refresh. Succeeded: ${result.refreshed.join(', ')}, Failed: ${result.failed.join(', ')}`);
+        }
       } catch (error: any) {
-        logger.error('Failed to refresh materialized view:', error);
+        logger.error('Failed to refresh materialized views:', error);
         // Don't fail the rollback if view refresh fails
       }
 

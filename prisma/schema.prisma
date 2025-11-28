@@ -146,6 +146,17 @@ model FundTransaction {
   // Example: "2018-07-24-701-555863519-701-5558635193a"
   goalTransactionCode  String
 
+  // *** SOURCE TRACKING FIELDS ***
+  // Transaction ID from source statement (e.g., bank statement)
+  // Must be consistent across all fund transactions with same goalTransactionCode
+  // Optional for backward compatibility with existing records
+  transactionId        String?
+
+  // Transaction source/channel
+  // Must be consistent across all fund transactions with same goalTransactionCode
+  // Optional for backward compatibility with existing records
+  source               TransactionSource?
+
   // Foreign Keys
   clientId             String
   accountId            String
@@ -185,6 +196,8 @@ model FundTransaction {
   @@unique([uploadBatchId, rowNumber]) // Prevent duplicate rows from same upload
   @@index([fundTransactionId]) // For deduplication checks
   @@index([goalTransactionCode]) // Critical for grouping
+  @@index([transactionId]) // For source transaction tracking
+  @@index([source]) // For source-based queries
   @@index([transactionDate])
   @@index([clientId])
   @@index([accountId])
@@ -426,4 +439,16 @@ enum ValidationSeverity {
   CRITICAL
   WARNING
   INFO
+}
+
+enum TransactionSource {
+  Transfer_Reversal
+  AIRTEL_APP
+  MTN_USSD
+  AIRTEL_WEB
+  MTN_APP
+  MTN_WEB
+  BANK
+  MTN_MOMO
+  AIRTEL_MONEY
 }

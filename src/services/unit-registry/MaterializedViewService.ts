@@ -6,9 +6,76 @@ const prisma = new PrismaClient();
 
 /**
  * Service for managing materialized view refreshes
- * Handles account_unit_balances materialized view updates
+ * Handles all materialized views in the system
  */
 export class MaterializedViewService {
+  /**
+   * Refresh ALL materialized views
+   * This should be called:
+   * - After bulk transaction uploads
+   * - After transaction deletions
+   * - After any data modification that affects views
+   */
+  static async refreshAllViews(): Promise<{
+    success: boolean;
+    duration: number;
+    refreshed: string[];
+    failed: string[];
+    error?: string;
+  }> {
+    const startTime = Date.now();
+    const refreshed: string[] = [];
+    const failed: string[] = [];
+
+    try {
+      logger.info('Starting refresh of all materialized views');
+
+      // Refresh goal_transactions_view
+      try {
+        await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY goal_transactions_view`;
+        refreshed.push('goal_transactions_view');
+        logger.info('✅ goal_transactions_view refreshed');
+      } catch (error: any) {
+        logger.error('❌ Failed to refresh goal_transactions_view:', error);
+        failed.push('goal_transactions_view');
+      }
+
+      // Refresh account_unit_balances
+      try {
+        await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY account_unit_balances`;
+        refreshed.push('account_unit_balances');
+        logger.info('✅ account_unit_balances refreshed');
+      } catch (error: any) {
+        logger.error('❌ Failed to refresh account_unit_balances:', error);
+        failed.push('account_unit_balances');
+      }
+
+      const duration = Date.now() - startTime;
+      logger.info(`All materialized views refreshed in ${duration}ms (${refreshed.length} succeeded, ${failed.length} failed)`);
+
+      // Invalidate related caches
+      await this.invalidateRelatedCaches();
+
+      return {
+        success: failed.length === 0,
+        duration,
+        refreshed,
+        failed,
+      };
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      logger.error('Error refreshing materialized views:', error);
+
+      return {
+        success: false,
+        duration,
+        refreshed,
+        failed,
+        error: error.message,
+      };
+    }
+  }
+
   /**
    * Refresh the account_unit_balances materialized view
    * This should be called:
@@ -30,6 +97,43 @@ export class MaterializedViewService {
       // Refresh the materialized view concurrently (non-blocking)
       // CONCURRENTLY allows queries to continue during refresh
       await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY account_unit_balances`;
+
+      const duration = Date.now() - startTime;
+      logger.info(`Materialized view refreshed successfully in ${duration}ms`);
+
+      // Invalidate related caches
+      await this.invalidateRelatedCaches();
+
+      return {
+        success: true,
+        duration,
+      };
+    } catch (error: any) {
+      const duration = Date.now() - startTime;
+      logger.error('Error refreshing materialized view:', error);
+
+      return {
+        success: false,
+        duration,
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Refresh the goal_transactions_view materialized view
+   */
+  static async refreshGoalTransactions(): Promise<{
+    success: boolean;
+    duration: number;
+    error?: string;
+  }> {
+    const startTime = Date.now();
+
+    try {
+      logger.info('Starting materialized view refresh: goal_transactions_view');
+
+      await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY goal_transactions_view`;
 
       const duration = Date.now() - startTime;
       logger.info(`Materialized view refreshed successfully in ${duration}ms`);

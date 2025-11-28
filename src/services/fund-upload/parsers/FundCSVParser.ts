@@ -112,16 +112,36 @@ export class FundCSVParser {
       const accountCategory = StringUtils.clean(row.accountCategory).toUpperCase();
       const sponsorCode = StringUtils.clean(row.sponsorCode); // Optional
 
-      // Generate goalTransactionCode
+      // Parse source tracking fields (required)
+      const transactionId = StringUtils.clean(row.transactionId);
+      const source = StringUtils.clean(row.source);
+
+      if (!transactionId) {
+        logger.warn(`Row ${rowNumber}: Missing transactionId`);
+        return null;
+      }
+
+      if (!source) {
+        logger.warn(`Row ${rowNumber}: Missing source`);
+        return null;
+      }
+
+      // Generate goalTransactionCode (includes transactionId and source to distinguish transactions)
+      // - transactionId: Handles multiple transactions same day (e.g., regular vs reversal)
+      // - source: Handles split disbursements (e.g., same bank txn distributed via BANK, AIRTEL, MTN)
       const goalTransactionCode = GoalTransactionCodeGenerator.generate(
         transactionDate,
         accountNumber,
-        goalNumber
+        goalNumber,
+        transactionId,
+        source
       );
 
       return {
         fundTransactionId,
         goalTransactionCode,
+        transactionId,
+        source,
         transactionDate,
         clientName,
         fundCode,
@@ -181,6 +201,8 @@ export class FundCSVParser {
       'accountNumber',
       'accountType',
       'accountCategory',
+      'transactionId', // Source transaction ID (e.g., from bank statement)
+      'source', // Transaction source/channel
       // sponsorCode is optional, not required
     ];
 

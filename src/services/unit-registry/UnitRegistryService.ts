@@ -91,6 +91,7 @@ export class UnitRegistryService {
     search?: string;
     accountType?: string;
     accountCategory?: string;
+    asOfDate?: string;
     limit?: number;
     offset?: number;
     sortBy?: string;
@@ -102,6 +103,7 @@ export class UnitRegistryService {
       search,
       accountType,
       accountCategory,
+      asOfDate,
       limit = 100,
       offset = 0,
       sortBy = 'clientName',
@@ -109,6 +111,13 @@ export class UnitRegistryService {
     } = filters;
 
     try {
+      // If asOfDate is provided, we need to calculate balances from fund_transactions
+      // instead of using the materialized view (which has all-time totals)
+      if (asOfDate) {
+        logger.info(`Loading unit registry as of date: ${asOfDate}`);
+        return await this.getUnitRegistryAsOfDate(asOfDate, filters);
+      }
+
       logger.info('Loading unit registry from materialized view...');
 
       // Get latest fund prices (cached)
@@ -304,16 +313,276 @@ export class UnitRegistryService {
   }
 
   /**
-   * Get latest mid prices for all funds (OPTIMIZED - single query with caching)
+   * Get unit registry as of a specific date (calculates from fund_transactions)
    */
-  private static async getLatestPrices(): Promise<{
+  private static async getUnitRegistryAsOfDate(
+    asOfDate: string,
+    filters: {
+      showOnlyFunded?: boolean;
+      fundedThreshold?: number;
+      search?: string;
+      accountType?: string;
+      accountCategory?: string;
+      limit?: number;
+      offset?: number;
+      sortBy?: string;
+      sortOrder?: 'asc' | 'desc';
+    }
+  ): Promise<UnitRegistryResult> {
+    const {
+      showOnlyFunded = true,
+      fundedThreshold = 5000,
+      search,
+      accountType,
+      accountCategory,
+      limit = 100,
+      offset = 0,
+      sortBy = 'clientName',
+      sortOrder = 'asc',
+    } = filters;
+
+    // Get prices as of the specified date
+    const prices = await this.getLatestPrices(asOfDate);
+
+    // Build WHERE clause for filtering
+    const queryParams: any[] = [asOfDate]; // First parameter is always the asOfDate
+    const conditions: string[] = ['ft."transactionDate" <= $1::date'];
+    let paramIndex = 2;
+
+    // Search filter
+    if (search !== undefined && search !== '') {
+      conditions.push(`(LOWER(a."accountNumber") LIKE $${paramIndex} OR LOWER(c."clientName") LIKE $${paramIndex})`);
+      queryParams.push(`%${search.toLowerCase()}%`);
+      paramIndex++;
+    }
+
+    // Account type filter
+    if (accountType) {
+      conditions.push(`a."accountType"::text = $${paramIndex}`);
+      queryParams.push(accountType);
+      paramIndex++;
+    }
+
+    // Account category filter
+    if (accountCategory) {
+      conditions.push(`a."accountCategory"::text = $${paramIndex}`);
+      queryParams.push(accountCategory);
+      paramIndex++;
+    }
+
+    const fullWhereClause = conditions.join(' AND ');
+
+    // Calculate balances from fund_transactions up to the specified date
+    const query = `
+      SELECT
+        a.id as "accountId",
+        c."clientName" as "clientName",
+        a."accountNumber",
+        a."accountType",
+        a."accountCategory",
+        MAX(ft."transactionDate") as "lastTransactionDate",
+        COALESCE(SUM(CASE WHEN f."fundCode" = 'XUMMF' THEN ft.units ELSE 0 END), 0) as xummf_units,
+        COALESCE(SUM(CASE WHEN f."fundCode" = 'XUBF' THEN ft.units ELSE 0 END), 0) as xubf_units,
+        COALESCE(SUM(CASE WHEN f."fundCode" = 'XUDEF' THEN ft.units ELSE 0 END), 0) as xudef_units,
+        COALESCE(SUM(CASE WHEN f."fundCode" = 'XUREF' THEN ft.units ELSE 0 END), 0) as xuref_units,
+        COALESCE((
+          SELECT COUNT(*)
+          FROM goals g
+          WHERE g."accountId" = a.id
+        ), 0) as "goalCount"
+      FROM fund_transactions ft
+      JOIN goals g ON ft."goalId" = g.id
+      JOIN accounts a ON g."accountId" = a.id
+      JOIN clients c ON a."clientId" = c.id
+      JOIN funds f ON ft."fundId" = f.id
+      WHERE ${fullWhereClause}
+      GROUP BY a.id, c."clientName", a."accountNumber", a."accountType", a."accountCategory"
+    `;
+
+    // Get total value for each account to apply funded filter
+    const allResults: any[] = await prisma.$queryRawUnsafe(query, ...queryParams);
+
+    // Apply funded filter and transform results
+    let filteredResults = allResults;
+    if (showOnlyFunded) {
+      filteredResults = allResults.filter((row) => {
+        const units = {
+          XUMMF: Number(row.xummf_units) || 0,
+          XUBF: Number(row.xubf_units) || 0,
+          XUDEF: Number(row.xudef_units) || 0,
+          XUREF: Number(row.xuref_units) || 0,
+        };
+        const totalValue =
+          units.XUMMF * (prices.XUMMF || 0) +
+          units.XUBF * (prices.XUBF || 0) +
+          units.XUDEF * (prices.XUDEF || 0) +
+          units.XUREF * (prices.XUREF || 0);
+        return totalValue >= fundedThreshold;
+      });
+    }
+
+    const total = filteredResults.length;
+
+    // Sort
+    const sortedResults = [...filteredResults].sort((a, b) => {
+      let aVal: any, bVal: any;
+      if (sortBy === 'clientName') {
+        aVal = a.clientName;
+        bVal = b.clientName;
+      } else if (sortBy === 'accountNumber') {
+        aVal = a.accountNumber;
+        bVal = b.accountNumber;
+      } else if (sortBy === 'totalValue') {
+        aVal =
+          Number(a.xummf_units) * (prices.XUMMF || 0) +
+          Number(a.xubf_units) * (prices.XUBF || 0) +
+          Number(a.xudef_units) * (prices.XUDEF || 0) +
+          Number(a.xuref_units) * (prices.XUREF || 0);
+        bVal =
+          Number(b.xummf_units) * (prices.XUMMF || 0) +
+          Number(b.xubf_units) * (prices.XUBF || 0) +
+          Number(b.xudef_units) * (prices.XUDEF || 0) +
+          Number(b.xuref_units) * (prices.XUREF || 0);
+      }
+
+      if (typeof aVal === 'string') {
+        return sortOrder === 'asc' ? aVal.localeCompare(bVal) : bVal.localeCompare(aVal);
+      } else {
+        return sortOrder === 'asc' ? aVal - bVal : bVal - aVal;
+      }
+    });
+
+    // Paginate
+    const paginatedResults = sortedResults.slice(offset, offset + limit);
+
+    // Transform to entries
+    const entries: UnitRegistryEntry[] = paginatedResults.map((row) => {
+      const units = {
+        XUMMF: Number(row.xummf_units) || 0,
+        XUBF: Number(row.xubf_units) || 0,
+        XUDEF: Number(row.xudef_units) || 0,
+        XUREF: Number(row.xuref_units) || 0,
+      };
+
+      const values = {
+        XUMMF: units.XUMMF * (prices.XUMMF || 0),
+        XUBF: units.XUBF * (prices.XUBF || 0),
+        XUDEF: units.XUDEF * (prices.XUDEF || 0),
+        XUREF: units.XUREF * (prices.XUREF || 0),
+      };
+
+      const totalValue = Object.values(values).reduce((sum, v) => sum + v, 0);
+
+      return {
+        accountId: row.accountId,
+        clientName: row.clientName,
+        accountNumber: row.accountNumber,
+        accountType: row.accountType,
+        accountCategory: row.accountCategory,
+        goalCount: Number(row.goalCount) || 0,
+        lastTransactionDate: row.lastTransactionDate,
+        units,
+        values,
+        totalValue,
+      };
+    });
+
+    // Calculate summary from all filtered results
+    const totalUnits = {
+      XUMMF: filteredResults.reduce((sum, r) => sum + Number(r.xummf_units), 0),
+      XUBF: filteredResults.reduce((sum, r) => sum + Number(r.xubf_units), 0),
+      XUDEF: filteredResults.reduce((sum, r) => sum + Number(r.xudef_units), 0),
+      XUREF: filteredResults.reduce((sum, r) => sum + Number(r.xuref_units), 0),
+    };
+
+    const totalValues = {
+      XUMMF: totalUnits.XUMMF * (prices.XUMMF || 0),
+      XUBF: totalUnits.XUBF * (prices.XUBF || 0),
+      XUDEF: totalUnits.XUDEF * (prices.XUDEF || 0),
+      XUREF: totalUnits.XUREF * (prices.XUREF || 0),
+    };
+
+    const totalValue = Object.values(totalValues).reduce((sum, v) => sum + v, 0);
+
+    const summary = {
+      totalClients: filteredResults.length,
+      totalUnits,
+      totalValues,
+      totalValue,
+    };
+
+    logger.info(`Unit registry loaded as of ${asOfDate}: ${entries.length} entries`);
+
+    return {
+      entries,
+      asOfDate: prices.asOfDate,
+      prices: {
+        XUMMF: prices.XUMMF,
+        XUBF: prices.XUBF,
+        XUDEF: prices.XUDEF,
+        XUREF: prices.XUREF,
+      },
+      summary,
+      total,
+      limit,
+      offset,
+    };
+  }
+
+  /**
+   * Get latest mid prices for all funds (OPTIMIZED - single query with caching)
+   * If asOfDate is provided, gets prices as of that date
+   */
+  private static async getLatestPrices(asOfDate?: string): Promise<{
     XUMMF: number | null;
     XUBF: number | null;
     XUDEF: number | null;
     XUREF: number | null;
     asOfDate: Date | null;
   }> {
-    // Try to get from cache first
+    // If asOfDate is provided, skip cache and fetch prices as of that date
+    if (asOfDate) {
+      logger.debug(`Fetching fund prices as of ${asOfDate}`);
+
+      const pricesAsOfDate: any[] = await prisma.$queryRawUnsafe(
+        `
+        SELECT DISTINCT ON (f."fundCode")
+          f."fundCode",
+          fp."midPrice",
+          fp."priceDate"
+        FROM funds f
+        LEFT JOIN fund_prices fp ON fp."fundId" = f.id
+        WHERE f."fundCode" IN ('XUMMF', 'XUBF', 'XUDEF', 'XUREF')
+          AND fp."priceDate" <= $1::date
+        ORDER BY f."fundCode", fp."priceDate" DESC NULLS LAST
+      `,
+        asOfDate
+      );
+
+      const prices: any = {
+        XUMMF: null,
+        XUBF: null,
+        XUDEF: null,
+        XUREF: null,
+        asOfDate: null,
+      };
+
+      // Transform results
+      for (const row of pricesAsOfDate) {
+        if (row.midPrice) {
+          prices[row.fundCode] = Number(row.midPrice);
+
+          // Track the latest price date across all funds
+          if (!prices.asOfDate || row.priceDate > prices.asOfDate) {
+            prices.asOfDate = row.priceDate;
+          }
+        }
+      }
+
+      return prices;
+    }
+
+    // Try to get from cache first (for latest prices only)
     const cachedPrices = await CacheService.get<{
       XUMMF: number | null;
       XUBF: number | null;
@@ -380,13 +649,33 @@ export class UnitRegistryService {
    * Get goal-level breakdown for a specific account
    */
   static async getAccountGoalBreakdown(
-    accountId: string
+    accountId: string,
+    asOfDate?: string
   ): Promise<GoalBalance[]> {
     try {
-      // Get fund prices
-      const latestPrices = await this.getLatestPrices();
+      // Get fund prices (as of date if specified)
+      const latestPrices = await this.getLatestPrices(asOfDate);
 
-      const query = `
+      // Build query with optional date filter
+      const query = asOfDate
+        ? `
+        SELECT
+          g.id as "goalId",
+          g."goalNumber",
+          g."goalTitle",
+          COALESCE(SUM(CASE WHEN f."fundCode" = 'XUMMF' THEN ft.units ELSE 0 END), 0) as xummf_units,
+          COALESCE(SUM(CASE WHEN f."fundCode" = 'XUBF' THEN ft.units ELSE 0 END), 0) as xubf_units,
+          COALESCE(SUM(CASE WHEN f."fundCode" = 'XUDEF' THEN ft.units ELSE 0 END), 0) as xudef_units,
+          COALESCE(SUM(CASE WHEN f."fundCode" = 'XUREF' THEN ft.units ELSE 0 END), 0) as xuref_units
+        FROM fund_transactions ft
+        JOIN goals g ON ft."goalId" = g.id
+        JOIN funds f ON ft."fundId" = f.id
+        WHERE g."accountId" = $1
+          AND ft."transactionDate" <= $2::date
+        GROUP BY g.id, g."goalNumber", g."goalTitle"
+        ORDER BY g."goalNumber"
+      `
+        : `
         SELECT
           g.id as "goalId",
           g."goalNumber",
@@ -403,7 +692,9 @@ export class UnitRegistryService {
         ORDER BY g."goalNumber"
       `;
 
-      const rawResults: any[] = await prisma.$queryRawUnsafe(query, accountId);
+      const rawResults: any[] = asOfDate
+        ? await prisma.$queryRawUnsafe(query, accountId, asOfDate)
+        : await prisma.$queryRawUnsafe(query, accountId);
 
       return rawResults.map((row) => {
         const units = {

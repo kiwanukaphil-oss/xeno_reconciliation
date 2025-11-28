@@ -19,6 +19,7 @@ router.get('/', async (req: Request, res: Response) => {
     const search = req.query.search as string | undefined;
     const accountType = req.query.accountType as string | undefined;
     const accountCategory = req.query.accountCategory as string | undefined;
+    const asOfDate = req.query.asOfDate as string | undefined;
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 100;
     const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
     const sortBy = (req.query.sortBy as string) || 'clientName';
@@ -30,6 +31,7 @@ router.get('/', async (req: Request, res: Response) => {
       search,
       accountType,
       accountCategory,
+      asOfDate,
       limit,
       offset,
       sortBy,
@@ -100,8 +102,9 @@ router.get('/stats', async (_req: Request, res: Response) => {
 router.get('/accounts/:accountId/goals', async (req: Request, res: Response): Promise<void> => {
   try {
     const { accountId } = req.params;
+    const asOfDate = req.query.asOfDate as string | undefined;
 
-    const goals = await UnitRegistryService.getAccountGoalBreakdown(accountId);
+    const goals = await UnitRegistryService.getAccountGoalBreakdown(accountId, asOfDate);
 
     res.json(goals);
   } catch (error: any) {

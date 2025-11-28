@@ -7,7 +7,7 @@ import { EntityCreator } from './entity-management/EntityCreator';
 import { UploadBatchManager } from './database/UploadBatchManager';
 import { FundTransactionRepository } from './database/FundTransactionRepository';
 import { ParsedFundTransaction } from '../../types/fundTransaction';
-import { GoalTransactionService } from '../reporting/GoalTransactionService';
+import { MaterializedViewService } from '../unit-registry/MaterializedViewService';
 
 /**
  * Main processor for fund transaction file uploads
@@ -215,22 +215,29 @@ export class FundFileProcessor {
       },
     });
 
-    // Refresh materialized view for goal transactions
-    logger.info('=== STARTING MATERIALIZED VIEW REFRESH ===');
+    // Refresh all materialized views
+    logger.info('=== STARTING MATERIALIZED VIEWS REFRESH ===');
     logger.info(`Batch ID: ${batchId}, Transaction count: ${transactions.length}`);
     try {
-      logger.info('Calling GoalTransactionService.refreshMaterializedView()');
-      await GoalTransactionService.refreshMaterializedView();
-      logger.info('=== MATERIALIZED VIEW REFRESH COMPLETED SUCCESSFULLY ===');
+      const result = await MaterializedViewService.refreshAllViews();
+      if (result.success) {
+        logger.info('=== ALL MATERIALIZED VIEWS REFRESHED SUCCESSFULLY ===');
+        logger.info(`Refreshed views: ${result.refreshed.join(', ')}`);
+        logger.info(`Refresh duration: ${result.duration}ms`);
+      } else {
+        logger.warn('=== SOME MATERIALIZED VIEWS FAILED TO REFRESH ===');
+        logger.warn(`Succeeded: ${result.refreshed.join(', ')}`);
+        logger.warn(`Failed: ${result.failed.join(', ')}`);
+      }
     } catch (error: any) {
-      // Log error but don't fail the upload - view can be refreshed manually
-      logger.error('=== MATERIALIZED VIEW REFRESH FAILED ===');
+      // Log error but don't fail the upload - views can be refreshed manually
+      logger.error('=== MATERIALIZED VIEWS REFRESH FAILED ===');
       logger.error('Error details:', {
         message: error.message,
         stack: error.stack,
         name: error.name
       });
-      logger.warn('Upload completed but materialized view not refreshed - manual refresh may be needed');
+      logger.warn('Upload completed but materialized views not refreshed - manual refresh may be needed');
     }
 
     logger.info(`Processing completed successfully for batch ${batchId}`);

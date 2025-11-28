@@ -9,7 +9,7 @@ Building a robust client fund transaction ingestion system for managing unit tru
 
 ### Core Concept
 - **Hierarchy**: Client → Account → Goal → Fund Transactions
-- **Goal Transaction Linking**: Fund transactions are linked via `goalTransactionCode` (format: `{date}-{accountNumber}-{goalNumber}`)
+- **Goal Transaction Linking**: Fund transactions are linked via `goalTransactionCode` (format: `{date}-{accountNumber}-{goalNumber}-{transactionId}-{source}`)
 - **Fund Distribution**: Each goal transaction distributes across 4 funds (XUMMF, XUBF, XUDEF, XUREF) based on risk tolerance
 - **Processing Model**: Queue-based asynchronous processing inspired by proven GL upload architecture
 
@@ -41,6 +41,8 @@ UploadBatch (tracks processing status, validation results, statistics)
 
 ### Critical Fields
 - **FundTransaction.goalTransactionCode**: Links related fund transactions (indexed)
+- **FundTransaction.transactionId**: Transaction ID from source statement (e.g., bank statement) - must be consistent across all fund transactions with same goalTransactionCode
+- **FundTransaction.source**: Transaction source/channel - must be consistent across all fund transactions with same goalTransactionCode
 - **Goal.fundDistribution**: JSON with percentage allocations per fund
 - **UploadBatch.processingStatus**: QUEUED → PARSING → VALIDATING → PROCESSING → COMPLETED/FAILED
 - **UploadBatch.newEntitiesStatus**: Approval workflow for new clients/accounts/goals
@@ -104,38 +106,45 @@ XENO Reconciliation/
 4. Detect new entities (clients, accounts, goals)
 5. **IF new entities** → status: WAITING_FOR_APPROVAL → pause
 6. **ELSE** → Save to database (batched inserts) → status: COMPLETED
+7. **Automatically refresh all materialized views** (goal_transactions_view, account_unit_balances)
 
 ### Phase 3: Post-Approval (if needed)
 1. Create approved clients/accounts/goals
 2. Resume processing from step 2
 3. Finalize and update batch status
+4. **Automatically refresh all materialized views**
 
 ---
 
 ## Validation Rules
 
 ### Fund Transaction Level
-- Required fields: transactionDate, clientName, fundCode, amount, units, prices, accountNumber, goalNumber
+- Required fields: transactionDate, clientName, fundCode, amount, units, prices, accountNumber, goalNumber, **transactionId**, **source**
 - Date validation: valid format, not in future, within acceptable range
 - Amount validation: > 0, within limits
 - Unit trust math: units = amount / offerPrice (±0.01 tolerance)
 - Price validation: bidPrice ≤ midPrice ≤ offerPrice
 - Reference data: fundCode exists, prices available
+- **Source validation**: Must be one of: Transfer_Reversal, AIRTEL_APP, MTN_USSD, AIRTEL_WEB, MTN_APP, MTN_WEB, BANK, MTN_MOMO, AIRTEL_MONEY
 
 ### Goal Transaction Level (grouped by goalTransactionCode)
-- Consistency: same client, account, goal, date across all fund transactions
+- Consistency: same client, account, goal, date, **transactionId**, **source** across all fund transactions
 - Completeness: all 4 funds present (warning if not)
 - No duplicate fund codes
 - Distribution validation: amounts match goal.fundDistribution percentages (±1% tolerance)
+- **CRITICAL**: All fund transactions with the same goalTransactionCode MUST have the same transactionId and source - upload will be blocked if this condition is not met
 
 ---
 
 ## Key Services
 
 ### GoalTransactionCodeGenerator
-- Generates: `{YYYY-MM-DD}-{accountNumber}-{goalNumber}`
+- Generates: `{YYYY-MM-DD}-{accountNumber}-{goalNumber}-{transactionId}-{source}`
 - Validates format
 - Parses components from code
+- **Purpose of transactionId + source**:
+  - **transactionId**: Distinguishes multiple transactions on the same day (e.g., regular vs reversal)
+  - **source**: Handles split disbursements where same bank transaction ID is distributed across different payment methods (e.g., BANK123 → BANK, AIRTEL_MONEY, MTN_MOMO)
 
 ### FundCSVParser
 - Streams large CSV files
@@ -270,11 +279,27 @@ XENO Reconciliation/
 - Batch database inserts (500-1000 per transaction)
 - Index on goalTransactionCode for fast grouping
 - Index on transactionDate, accountId, goalId for queries
+- **Materialized views** for fast query performance on aggregated data
+
+### Materialized Views (Auto-Refresh)
+The system uses materialized views to optimize complex queries:
+- **goal_transactions_view**: Aggregates fund transactions by goalTransactionCode
+- **account_unit_balances**: Pre-calculates account balances
+
+**Auto-Refresh Triggers:**
+- ✅ After successful upload batch processing
+- ✅ After transaction deletion/rollback
+- ✅ Can be manually triggered via MaterializedViewService
+
+**Note:** Views refresh automatically after data changes, ensuring UI always shows current data.
 
 ### Business Rules
 - 4 funds: XUMMF, XUBF, XUDEF, XUREF
 - Account number format: XXX-XXXXXXXXX
 - Goal number format: {accountNumber}{suffix} (e.g., "701-5558635193a")
+- Goal transaction code format: {YYYY-MM-DD}-{accountNumber}-{goalNumber}-{transactionId}-{source}
+  - **transactionId**: Supports multiple distinct transactions on the same day (e.g., regular deposit + reversal)
+  - **source**: Handles split disbursements where same bank transaction ID is distributed across different payment methods (e.g., BANK123 → BANK, AIRTEL_MONEY, MTN_MOMO)
 - Unit trust calculation: units = amount / offerPrice (deposits)
 
 ### Future Enhancements

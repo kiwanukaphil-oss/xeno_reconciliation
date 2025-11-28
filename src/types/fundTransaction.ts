@@ -19,6 +19,8 @@ export interface RawFundTransactionRow {
   accountType: string;
   accountCategory: string;
   sponsorCode?: string; // Optional: for group/employer sponsored accounts
+  transactionId: string; // Transaction ID from source statement (e.g., bank statement)
+  source: string; // Transaction source/channel
 }
 
 // Parsed and typed transaction data
@@ -28,6 +30,10 @@ export interface ParsedFundTransaction {
 
   // Generated field
   goalTransactionCode: string;
+
+  // Source tracking fields
+  transactionId: string; // Transaction ID from source statement
+  source: string; // Transaction source/channel
 
   // Original fields (typed)
   transactionDate: Date;
