@@ -10,6 +10,7 @@ import {
   Eye,
   TrendingUp,
   TrendingDown,
+  Download,
 } from 'lucide-react';
 import {
   uploadBankFile,
@@ -74,6 +75,11 @@ const BankReconciliation = () => {
     fetchBatches();
   }, []);
 
+  const handleDownloadTemplate = () => {
+    const baseUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+    window.open(`${baseUrl}/api/bank-reconciliation/template/download`, '_blank');
+  };
+
   const fetchBatches = async () => {
     try {
       setLoading(true);
@@ -131,11 +137,8 @@ const BankReconciliation = () => {
       alert(
         `Upload successful!\n\n` +
           `Batch: ${result.data.batchNumber}\n` +
-          `Records: ${result.data.totalRecords}\n` +
-          `Matched: ${result.data.totalMatched}\n` +
-          `Unmatched: ${result.data.totalUnmatched}\n` +
-          `Auto-Approved: ${result.data.autoApprovedCount}\n` +
-          `Manual Review: ${result.data.manualReviewCount}`
+          `Status: ${result.data.status}\n\n` +
+          `${result.data.message}`
       );
 
       // Refresh batch list
@@ -229,10 +232,8 @@ const BankReconciliation = () => {
           {uploading ? (
             <div className="flex flex-col items-center">
               <Loader2 className="w-16 h-16 text-blue-600 animate-spin mb-4" />
-              <p className="text-lg font-medium text-gray-700">Processing upload...</p>
-              <p className="text-sm text-gray-500 mt-2">
-                Parsing, matching, and detecting variances
-              </p>
+              <p className="text-lg font-medium text-gray-700">Uploading bank transactions...</p>
+              <p className="text-sm text-gray-500 mt-2">Please wait while we process your file</p>
             </div>
           ) : (
             <>
@@ -256,9 +257,18 @@ const BankReconciliation = () => {
                   Select CSV File
                 </span>
               </label>
+              <div className="mt-4 flex items-center justify-center gap-4">
+                <button
+                  onClick={handleDownloadTemplate}
+                  className="px-4 py-2 text-sm text-blue-600 border border-blue-600 rounded-lg hover:bg-blue-50 inline-flex items-center gap-2"
+                >
+                  <Download className="w-4 h-4" />
+                  Download Template
+                </button>
+              </div>
               <p className="text-xs text-gray-500 mt-4">
                 Format: Date, First Name, Last Name, Acc Number, Goal Number, Total Amount,
-                Fund Amounts, Transaction Type, Transaction ID
+                Fund Percentages, Fund Amounts, Transaction Type, Transaction ID
               </p>
             </>
           )}

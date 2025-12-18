@@ -12,6 +12,7 @@ import fundPriceRoutes from './routes/fundPriceRoutes';
 import unitRegistryRoutes from './routes/unitRegistryRoutes';
 import dashboardRoutes from './routes/dashboardRoutes';
 import bankReconciliationRoutes from './routes/bankReconciliationRoutes';
+import bankUploadRoutes from './routes/bankUploadRoutes';
 
 const app = express();
 
@@ -43,6 +44,7 @@ app.use('/api/fund-prices', fundPriceRoutes);
 app.use('/api/unit-registry', unitRegistryRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/bank-reconciliation', bankReconciliationRoutes);
+app.use('/api/bank-upload', bankUploadRoutes);
 
 // 404 handler
 app.use(notFoundHandler);

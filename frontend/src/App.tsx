@@ -13,6 +13,7 @@ import {
   Wallet,
   GitCompare,
   AlertTriangle,
+  Building2,
 } from "lucide-react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
@@ -21,8 +22,10 @@ import { queryClient } from "./lib/queryClient";
 // Import components
 import Dashboard from "./components/Dashboard";
 import FundUpload from "./components/fund-upload/FundUpload";
+import BankUpload from "./components/bank-upload/BankUpload";
 import GoalTransactions from "./components/transactions/GoalTransactions";
 import FundTransactions from "./components/transactions/FundTransactions";
+import BankTransactions from "./components/transactions/BankTransactions";
 import ApprovalQueue from "./components/approval/ApprovalQueue";
 import { FundPrices } from "./components/fund-price/FundPrices";
 import { UnitRegistry } from "./components/unit-registry/UnitRegistry";
@@ -45,6 +48,12 @@ const App = () => {
       name: "Fund Upload",
       icon: Upload,
       description: "Upload CSV/Excel files",
+    },
+    {
+      id: "bank-upload",
+      name: "Bank Upload",
+      icon: Building2,
+      description: "Upload bank transaction files",
     },
     {
       id: "bank-reconciliation",
@@ -83,6 +92,12 @@ const App = () => {
       description: "Individual fund transactions",
     },
     {
+      id: "bank-transactions",
+      name: "Bank Transactions",
+      icon: Building2,
+      description: "Uploaded bank transaction records",
+    },
+    {
       id: "approval",
       name: "Approval Queue",
       icon: CheckSquare,
@@ -102,6 +117,8 @@ const App = () => {
         return <Dashboard />;
       case "upload":
         return <FundUpload />;
+      case "bank-upload":
+        return <BankUpload />;
       case "bank-reconciliation":
         return <BankReconciliation />;
       case "variance-review":
@@ -114,6 +131,8 @@ const App = () => {
         return <GoalTransactions />;
       case "fund-transactions":
         return <FundTransactions />;
+      case "bank-transactions":
+        return <BankTransactions />;
       case "approval":
         return <ApprovalQueue />;
       default:

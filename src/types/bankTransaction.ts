@@ -1,28 +1,34 @@
-import { TransactionType } from '@prisma/client';
-
 /**
  * Raw bank transaction row from CSV
  * Matches the format: Date,First Name,Last Name,Acc Number,Goal Name,Goal Number,
  * Total Amount,XUMMF,XUBF,XUDEF,XUREF,XUMMF,XUBF,XUDEF,XUREF,Transaction Type,Transaction ID
  */
 export interface RawBankTransactionRow {
-  Date: string;
-  'First Name': string;
-  'Last Name': string;
-  'Acc Number': string;
-  'Goal Name': string;
-  'Goal Number': string;
-  'Total Amount': string;
-  // First set of fund columns (percentages as decimals)
-  XUMMF: string;
-  XUBF: string;
-  XUDEF: string;
-  XUREF: string;
-  // Note: Second set of XUMMF, XUBF, XUDEF, XUREF in CSV are amounts
-  // PapaParse will only capture first occurrence of duplicate headers
-  // We'll need to handle this specially
-  'Transaction Type': string;
-  'Transaction ID': string;
+  Date?: string;
+  date?: string;
+  'First Name'?: string;
+  'first name'?: string;
+  'Last Name'?: string;
+  'last name'?: string;
+  'Acc Number'?: string;
+  'acc number'?: string;
+  'Goal Name'?: string;
+  'goal name'?: string;
+  'Goal Number'?: string;
+  'goal number'?: string;
+  'Total Amount'?: string;
+  'total amount'?: string;
+  // Fund columns (may appear twice: percentages and amounts)
+  XUMMF?: string;
+  XUBF?: string;
+  XUDEF?: string;
+  XUREF?: string;
+  'Transaction Type'?: string;
+  'transaction type'?: string;
+  'Transaction ID'?: string;
+  'transaction id'?: string;
+  // Allow any other columns
+  [key: string]: string | undefined;
 }
 
 /**
@@ -41,25 +47,21 @@ export interface ParsedBankTransaction {
 
   // Transaction details
   transactionDate: Date;
-  transactionType: TransactionType;
+  transactionType: string;
   transactionId: string;
   totalAmount: number;
 
-  // Fund distribution percentages (as decimals, e.g., 0.4 for 40%)
-  fundPercentages: {
-    XUMMF: number;
-    XUBF: number;
-    XUDEF: number;
-    XUREF: number;
-  };
+  // Fund distribution percentages (as whole numbers, e.g., 40 for 40%)
+  xummfPercentage: number;
+  xubfPercentage: number;
+  xudefPercentage: number;
+  xurefPercentage: number;
 
   // Fund distribution amounts
-  fundAmounts: {
-    XUMMF: number;
-    XUBF: number;
-    XUDEF: number;
-    XUREF: number;
-  };
+  xummfAmount: number;
+  xubfAmount: number;
+  xudefAmount: number;
+  xurefAmount: number;
 }
 
 /**
@@ -69,4 +71,25 @@ export interface ValidatedBankTransaction extends ParsedBankTransaction {
   clientId: string;
   accountId: string;
   goalId: string;
+}
+
+/**
+ * Validation error for bank transactions
+ */
+export interface ValidationError {
+  rowNumber: number;
+  field: string;
+  value: any;
+  errorCode: string;
+  message: string;
+  severity: 'CRITICAL' | 'WARNING' | 'INFO';
+  suggestedAction: string;
+}
+
+/**
+ * Invalid bank transaction with errors
+ */
+export interface InvalidBankTransaction {
+  transaction: ParsedBankTransaction;
+  errors: ValidationError[];
 }

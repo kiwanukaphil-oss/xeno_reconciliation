@@ -67,6 +67,40 @@ export class FundFileProcessor {
         );
       }
 
+      // CRITICAL: Fail the ENTIRE batch if ANY transactions are invalid
+      // This prevents partial uploads which could cause data integrity issues
+      if (validationResult.invalidTransactions.length > 0) {
+        const invalidCount = validationResult.invalidTransactions.length;
+        const totalCount = transactions.length;
+
+        // Build detailed error message with specific row numbers and errors
+        const errorDetails = validationResult.invalidTransactions
+          .slice(0, 20) // Show first 20 errors
+          .map((inv, index) => {
+            const rowNum = inv.transaction.rowNumber;
+            const errors = inv.errors.map(e => e.message).join('; ');
+            return `  ${index + 1}. Row ${rowNum}: ${errors}`;
+          })
+          .join('\n');
+
+        const moreErrorsMsg = invalidCount > 20
+          ? `\n  ... and ${invalidCount - 20} more invalid transactions`
+          : '';
+
+        logger.error(`=== BATCH REJECTED: ${invalidCount} of ${totalCount} transactions failed validation ===`);
+        logger.error('Invalid transactions:\n' + errorDetails + moreErrorsMsg);
+
+        await UploadBatchManager.updateBatchStatus(batchId, 'FAILED');
+
+        // Include detailed errors in the thrown error message
+        throw new Error(
+          `Upload rejected: ${invalidCount} of ${totalCount} transactions failed validation.\n\n` +
+          `INVALID TRANSACTIONS:\n${errorDetails}${moreErrorsMsg}\n\n` +
+          `ALL transactions must be valid before upload can proceed. ` +
+          `Please fix the errors and re-upload the entire file.`
+        );
+      }
+
       // If there are critical errors in goal transaction validation, fail
       const criticalGroupErrors = groupErrors.filter((e) => e.severity === 'CRITICAL');
       if (criticalGroupErrors.length > 0) {
@@ -155,6 +189,21 @@ export class FundFileProcessor {
 
       const validationResult = FundTransactionValidator.validateBatch(transactions);
       logger.info(`Validation complete: ${validationResult.validTransactions.length} valid, ${validationResult.invalidTransactions.length} invalid`);
+
+      // CRITICAL: Fail if ANY transactions are invalid - no partial uploads allowed
+      if (validationResult.invalidTransactions.length > 0) {
+        const invalidCount = validationResult.invalidTransactions.length;
+        const totalCount = transactions.length;
+
+        logger.error(`=== BATCH REJECTED ON RESUME: ${invalidCount} of ${totalCount} transactions failed validation ===`);
+
+        await UploadBatchManager.updateBatchStatus(batchId, 'FAILED');
+
+        throw new Error(
+          `Upload rejected: ${invalidCount} of ${totalCount} transactions failed validation. ` +
+          `ALL transactions must be valid before upload can proceed.`
+        );
+      }
 
       // Save transactions
       logger.info('Calling finalizeProcessing...');

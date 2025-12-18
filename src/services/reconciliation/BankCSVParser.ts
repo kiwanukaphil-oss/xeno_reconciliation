@@ -154,18 +154,14 @@ export class BankCSVParser {
         transactionType,
         transactionId,
         totalAmount,
-        fundPercentages: {
-          XUMMF: xummfPct,
-          XUBF: xubfPct,
-          XUDEF: xudefPct,
-          XUREF: xurefPct,
-        },
-        fundAmounts: {
-          XUMMF: xummfAmt,
-          XUBF: xubfAmt,
-          XUDEF: xudefAmt,
-          XUREF: xurefAmt,
-        },
+        xummfPercentage: xummfPct,
+        xubfPercentage: xubfPct,
+        xudefPercentage: xudefPct,
+        xurefPercentage: xurefPct,
+        xummfAmount: xummfAmt,
+        xubfAmount: xubfAmt,
+        xudefAmount: xudefAmt,
+        xurefAmount: xurefAmt,
       };
     } catch (error) {
       logger.error(`Row ${rowNumber}: Unexpected parsing error:`, error);

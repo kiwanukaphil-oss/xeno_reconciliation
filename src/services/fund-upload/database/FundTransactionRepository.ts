@@ -52,11 +52,12 @@ export class FundTransactionRepository {
     const resolvedTransactions = await this.resolveForeignKeys(transactions);
 
     // Create transaction records
+    // Convert empty strings to null for nullable fields (transactionId, source)
     const createData = resolvedTransactions.map((txn) => ({
       fundTransactionId: txn.fundTransactionId,
       goalTransactionCode: txn.goalTransactionCode,
-      transactionId: txn.transactionId,
-      source: txn.source as any,
+      transactionId: txn.transactionId || null, // Empty string -> null
+      source: (txn.source || null) as any, // Empty string -> null (nullable enum)
       clientId: txn.clientId,
       accountId: txn.accountId,
       goalId: txn.goalId,

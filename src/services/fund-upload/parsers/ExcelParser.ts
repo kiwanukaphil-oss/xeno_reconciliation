@@ -127,19 +127,11 @@ export class ExcelParser {
       const accountCategory = StringUtils.clean(row.accountCategory).toUpperCase();
       const sponsorCode = StringUtils.clean(row.sponsorCode); // Optional
 
-      // Parse source tracking fields (required)
-      const transactionId = StringUtils.clean(row.transactionId);
-      const source = StringUtils.clean(row.source);
-
-      if (!transactionId) {
-        logger.warn(`Row ${rowNumber}: Missing transactionId`);
-        return null;
-      }
-
-      if (!source) {
-        logger.warn(`Row ${rowNumber}: Missing source`);
-        return null;
-      }
+      // Parse source tracking fields (validation will check if required)
+      // DO NOT skip rows here - let the validator handle missing fields
+      // so we get proper error reporting instead of silent rejection
+      const transactionId = StringUtils.clean(row.transactionId) || '';
+      const source = StringUtils.clean(row.source) || '';
 
       // Generate goalTransactionCode (includes transactionId and source to distinguish transactions)
       // - transactionId: Handles multiple transactions same day (e.g., regular vs reversal)

@@ -234,6 +234,11 @@ export const getAllBankBatches = async (limit: number = 50, offset: number = 0) 
   return handleResponse(response);
 };
 
+export const getBankBatchStatus = async (batchId: string) => {
+  const response = await fetch(`${API_URL}/api/bank-reconciliation/batches/${batchId}/status`);
+  return handleResponse(response);
+};
+
 export const getBankBatchSummary = async (batchId: string) => {
   const response = await fetch(`${API_URL}/api/bank-reconciliation/batches/${batchId}/summary`);
   return handleResponse(response);
@@ -275,5 +280,135 @@ export const resolveVariance = async (
       resolvedBy,
     }),
   });
+  return handleResponse(response);
+};
+
+// =============================================================================
+// NEW Bank Upload APIs (mirrors Fund Upload pattern)
+// =============================================================================
+
+export const downloadBankTemplate = async () => {
+  const response = await fetch(`${API_URL}/api/bank-upload/template`);
+  if (!response.ok) {
+    throw new Error("Failed to download template");
+  }
+  return response.blob();
+};
+
+export const uploadBankTransactionFile = async (file: File, uploadedBy: string = "user", metadata?: any) => {
+  const formData = new FormData();
+  formData.append("file", file);
+  formData.append("uploadedBy", uploadedBy);
+  if (metadata) {
+    formData.append("metadata", JSON.stringify(metadata));
+  }
+
+  const response = await fetch(`${API_URL}/api/bank-upload/upload`, {
+    method: "POST",
+    body: formData,
+  });
+  return handleResponse(response);
+};
+
+export const getBankUploadBatchStatus = async (batchId: string) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/batches/${batchId}/status`);
+  return handleResponse(response);
+};
+
+export const getBankUploadBatchSummary = async (batchId: string) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/batches/${batchId}/summary`);
+  return handleResponse(response);
+};
+
+export const getAllBankUploadBatches = async (page: number = 1, limit: number = 20) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/batches?page=${page}&limit=${limit}`);
+  return handleResponse(response);
+};
+
+export const cancelBankUploadBatch = async (batchId: string) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/batches/${batchId}/cancel`, {
+    method: "POST",
+  });
+  return handleResponse(response);
+};
+
+export const rollbackBankUploadBatch = async (batchId: string) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/batches/${batchId}/rollback`, {
+    method: "DELETE",
+  });
+  return handleResponse(response);
+};
+
+export const getBankUploadTransactions = async (batchId: string) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/batches/${batchId}/transactions`);
+  return handleResponse(response);
+};
+
+export const fetchBankTransactions = async (params: URLSearchParams) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/transactions?${params.toString()}`);
+  return handleResponse(response);
+};
+
+export const exportBankTransactionsCSV = async (params: URLSearchParams) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/transactions/export?${params.toString()}`);
+  if (!response.ok) {
+    throw new Error("Failed to export transactions");
+  }
+  return response.blob();
+};
+
+export const getBankTransactionById = async (transactionId: string) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/transactions/${transactionId}`);
+  return handleResponse(response);
+};
+
+export const updateBankTransactionStatus = async (
+  transactionId: string,
+  status: string,
+  notes?: string,
+  updatedBy?: string
+) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/transactions/${transactionId}/status`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      status,
+      notes,
+      updatedBy: updatedBy || "user",
+    }),
+  });
+  return handleResponse(response);
+};
+
+export const bulkUpdateBankTransactionStatus = async (
+  transactionIds: string[],
+  status: string,
+  notes?: string,
+  updatedBy?: string
+) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/transactions/bulk-status`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      transactionIds,
+      status,
+      notes,
+      updatedBy: updatedBy || "user",
+    }),
+  });
+  return handleResponse(response);
+};
+
+export const runBankReconciliation = async (transactionIds?: string[], batchSize: number = 2000) => {
+  const response = await fetch(`${API_URL}/api/bank-upload/reconciliation/run`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ transactionIds, batchSize }),
+  });
+  return handleResponse(response);
+};
+
+export const getBankReconciliationStats = async () => {
+  const response = await fetch(`${API_URL}/api/bank-upload/reconciliation/stats`);
   return handleResponse(response);
 };

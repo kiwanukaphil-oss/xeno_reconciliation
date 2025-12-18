@@ -145,6 +145,9 @@ export class FundTransactionValidator {
 
   /**
    * Validates source tracking fields (transactionId and source)
+   *
+   * These fields are REQUIRED for transactions from 2024 onwards (for reconciliation workflows)
+   * but OPTIONAL for historical data (pre-2024) that doesn't have them.
    */
   private static validateSourceTracking(
     transaction: ParsedFundTransaction
@@ -152,30 +155,40 @@ export class FundTransactionValidator {
     const errors: TransactionValidationError[] = [];
     const rowNumber = transaction.rowNumber;
 
+    // Cutoff date: transactionId and source are required from 2025 onwards
+    const SOURCE_TRACKING_REQUIRED_FROM = new Date('2025-01-01');
+    const isSourceTrackingRequired = transaction.transactionDate >= SOURCE_TRACKING_REQUIRED_FROM;
+
     // Validate transactionId
     if (StringUtils.isEmpty(transaction.transactionId)) {
-      errors.push({
-        rowNumber,
-        field: 'transactionId',
-        errorCode: 'REQUIRED_TRANSACTION_ID',
-        message: 'Transaction ID from source statement is required',
-        severity: 'CRITICAL',
-        suggestedAction: 'Ensure the transactionId field is not empty',
-      });
+      if (isSourceTrackingRequired) {
+        errors.push({
+          rowNumber,
+          field: 'transactionId',
+          errorCode: 'REQUIRED_TRANSACTION_ID',
+          message: 'Transaction ID from source statement is required for transactions from 2025 onwards',
+          severity: 'CRITICAL',
+          suggestedAction: 'Ensure the transactionId field is not empty',
+        });
+      }
+      // For historical data (pre-2024), missing transactionId is acceptable - no error
     }
 
     // Validate source
     if (StringUtils.isEmpty(transaction.source)) {
-      errors.push({
-        rowNumber,
-        field: 'source',
-        errorCode: 'REQUIRED_SOURCE',
-        message: 'Transaction source/channel is required',
-        severity: 'CRITICAL',
-        suggestedAction: 'Ensure the source field is not empty',
-      });
+      if (isSourceTrackingRequired) {
+        errors.push({
+          rowNumber,
+          field: 'source',
+          errorCode: 'REQUIRED_SOURCE',
+          message: 'Transaction source/channel is required for transactions from 2025 onwards',
+          severity: 'CRITICAL',
+          suggestedAction: 'Ensure the source field is not empty',
+        });
+      }
+      // For historical data (pre-2024), missing source is acceptable - no error
     } else if (!isValidTransactionSource(transaction.source)) {
-      // Validate source is one of the allowed values
+      // Validate source is one of the allowed values (if provided)
       errors.push({
         rowNumber,
         field: 'source',

@@ -1,11 +1,11 @@
-import React, { useState, useEffect } from 'react';
+import { useState, useEffect } from 'react';
 import {
   AlertTriangle,
   CheckCircle,
-  XCircle,
   Loader2,
-  Filter,
   Search,
+  ChevronLeft,
+  ChevronRight,
 } from 'lucide-react';
 import { getReconciliationVariances, resolveVariance } from '../../services/api';
 
@@ -29,6 +29,13 @@ interface Variance {
   };
 }
 
+interface Pagination {
+  page: number;
+  limit: number;
+  total: number;
+  totalPages: number;
+}
+
 const VarianceReview = () => {
   const [variances, setVariances] = useState<Variance[]>([]);
   const [loading, setLoading] = useState(true);
@@ -41,27 +48,52 @@ const VarianceReview = () => {
   const [resolutionNotes, setResolutionNotes] = useState('');
   const [resolving, setResolving] = useState(false);
   const [resolvedBy] = useState('Admin'); // TODO: Get from auth context
+  const [pagination, setPagination] = useState<Pagination>({
+    page: 1,
+    limit: 50,
+    total: 0,
+    totalPages: 0,
+  });
 
   useEffect(() => {
-    fetchVariances();
+    fetchVariances(1);
   }, [severityFilter, statusFilter]);
 
-  const fetchVariances = async () => {
+  const fetchVariances = async (page: number = 1, limitOverride?: number) => {
     try {
       setLoading(true);
+      const limit = limitOverride || pagination.limit;
+      const offset = (page - 1) * limit;
       const result = await getReconciliationVariances(
-        100,
-        0,
+        limit,
+        offset,
         severityFilter,
         statusFilter
       );
       setVariances(result.data.variances);
+      const total = result.data.pagination?.total || result.data.variances.length;
+      setPagination({
+        page,
+        limit,
+        total,
+        totalPages: Math.ceil(total / limit),
+      });
     } catch (error) {
       console.error('Failed to fetch variances:', error);
       alert(`Failed to load variances: ${(error as Error).message}`);
     } finally {
       setLoading(false);
     }
+  };
+
+  const handlePageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= pagination.totalPages) {
+      fetchVariances(newPage);
+    }
+  };
+
+  const handleLimitChange = (newLimit: number) => {
+    fetchVariances(1, newLimit);
   };
 
   const handleResolve = async () => {
@@ -257,10 +289,7 @@ const VarianceReview = () => {
                             variance.differenceAmount > 0 ? 'text-green-600' : 'text-red-600'
                           }
                         >
-                          {variance.differenceAmount.toLocaleString('en-UG', {
-                            style: 'currency',
-                            currency: 'UGX',
-                          })}
+                          {Number(variance.differenceAmount).toLocaleString('en-US')}
                         </span>
                       ) : (
                         <span className="text-gray-400">-</span>
@@ -292,6 +321,48 @@ const VarianceReview = () => {
                 ))}
               </tbody>
             </table>
+          </div>
+
+          {/* Pagination */}
+          <div className="px-4 py-3 border-t border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-4">
+              <span className="text-sm text-gray-700">
+                Showing {((pagination.page - 1) * pagination.limit) + 1} to{' '}
+                {Math.min(pagination.page * pagination.limit, pagination.total)} of{' '}
+                {pagination.total.toLocaleString()} variances
+              </span>
+              <select
+                value={pagination.limit}
+                onChange={(e) => handleLimitChange(parseInt(e.target.value))}
+                className="px-2 py-1 border border-gray-300 rounded text-sm focus:ring-2 focus:ring-blue-500"
+              >
+                <option value={25}>25 per page</option>
+                <option value={50}>50 per page</option>
+                <option value={100}>100 per page</option>
+                <option value={200}>200 per page</option>
+              </select>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handlePageChange(pagination.page - 1)}
+                disabled={pagination.page <= 1 || loading}
+                className="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" />
+                Previous
+              </button>
+              <span className="text-sm text-gray-700 px-3">
+                Page {pagination.page} of {pagination.totalPages}
+              </span>
+              <button
+                onClick={() => handlePageChange(pagination.page + 1)}
+                disabled={pagination.page >= pagination.totalPages || loading}
+                className="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+              >
+                Next
+                <ChevronRight className="h-4 w-4 ml-1" />
+              </button>
+            </div>
           </div>
         </div>
       )}

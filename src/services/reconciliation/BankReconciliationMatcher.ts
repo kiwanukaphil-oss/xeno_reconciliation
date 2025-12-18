@@ -213,7 +213,7 @@ export class BankReconciliationMatcher {
   private async detectVariances(
     bankTransaction: ParsedBankTransaction,
     fundTransactions: any[],
-    goalTransactionCode: string
+    _goalTransactionCode: string
   ): Promise<DetectedVariance[]> {
     const variances: DetectedVariance[] = [];
 
@@ -260,7 +260,9 @@ export class BankReconciliationMatcher {
     // Compare each fund
     const fundCodes = ['XUMMF', 'XUBF', 'XUDEF', 'XUREF'];
     for (const fundCode of fundCodes) {
-      const bankAmount = bankTransaction.fundAmounts[fundCode];
+      // Get bank amount from flat properties
+      const bankAmountKey = `${fundCode.toLowerCase()}Amount` as keyof typeof bankTransaction;
+      const bankAmount = bankTransaction[bankAmountKey] as number || 0;
       const fundAmount = fundAmounts[fundCode] || 0;
 
       const difference = Math.abs(bankAmount - fundAmount);
@@ -394,22 +396,10 @@ export class BankReconciliationMatcher {
   async findMissingInBank(
     uploadDateRange: { from: Date; to: Date }
   ): Promise<any[]> {
-    // Find fund transactions in date range that don't have matching bank transactions
-    const fundTransactions = await prisma.fundTransaction.groupBy({
-      by: ['goalTransactionCode'],
-      where: {
-        transactionDate: {
-          gte: uploadDateRange.from,
-          lte: uploadDateRange.to,
-        },
-      },
-      _count: true,
-    });
-
-    // TODO: Filter out those that have matching bank transactions
+    // TODO: Find fund transactions in date range that don't have matching bank transactions
     // This requires checking against the bank_goal_transactions table
     // For now, return empty array - will implement in BankReconciliationService
-
+    void uploadDateRange; // Acknowledge parameter for future implementation
     return [];
   }
 }

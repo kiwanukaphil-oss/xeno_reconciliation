@@ -33,10 +33,15 @@ const queueOptions: QueueOptions = {
 // Create fund processing queue
 export const fundProcessingQueue = new Queue('fund-processing', queueOptions);
 
+// Create bank reconciliation queue
+export const bankReconciliationQueue = new Queue('bank-reconciliation', queueOptions);
+
 // Job names
 export const JobNames = {
   PROCESS_NEW_UPLOAD: 'process-new-upload',
   RESUME_AFTER_APPROVAL: 'resume-after-approval',
+  // Bank reconciliation jobs
+  PROCESS_BANK_UPLOAD: 'process-bank-upload',
 } as const;
 
 export type JobName = (typeof JobNames)[keyof typeof JobNames];

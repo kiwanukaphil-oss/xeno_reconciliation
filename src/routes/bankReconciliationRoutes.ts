@@ -10,7 +10,7 @@ const reconciliationService = new BankReconciliationService();
 
 // Configure multer for file uploads
 const storage = multer.diskStorage({
-  destination: async (req, file, cb) => {
+  destination: async (_req, _file, cb) => {
     const uploadDir = process.env.UPLOAD_DIR || 'uploads/temp';
     try {
       await fs.mkdir(uploadDir, { recursive: true });
@@ -19,7 +19,7 @@ const storage = multer.diskStorage({
       cb(error as Error, uploadDir);
     }
   },
-  filename: (req, file, cb) => {
+  filename: (_req, file, cb) => {
     const uniqueSuffix = Date.now() + '-' + Math.round(Math.random() * 1e9);
     cb(null, `bank-${uniqueSuffix}${path.extname(file.originalname)}`);
   },
@@ -30,7 +30,7 @@ const upload = multer({
   limits: {
     fileSize: (parseInt(process.env.MAX_FILE_SIZE_MB || '100') * 1024 * 1024),
   },
-  fileFilter: (req, file, cb) => {
+  fileFilter: (_req, file, cb) => {
     const ext = path.extname(file.originalname).toLowerCase();
     if (ext !== '.csv') {
       cb(new Error('Only CSV files are allowed'));
@@ -41,8 +41,122 @@ const upload = multer({
 });
 
 /**
+ * GET /api/bank-reconciliation/template/download
+ * Download bank transaction CSV template
+ */
+router.get('/template/download', (_req: Request, res: Response): void => {
+  try {
+    // CSV headers matching the expected format
+    const headers = [
+      'Date',
+      'First Name',
+      'Last Name',
+      'Acc Number',
+      'Goal Name',
+      'Goal Number',
+      'Total Amount',
+      'XUMMF',  // Percentage
+      'XUBF',   // Percentage
+      'XUDEF',  // Percentage
+      'XUREF',  // Percentage
+      'XUMMF',  // Amount
+      'XUBF',   // Amount
+      'XUDEF',  // Amount
+      'XUREF',  // Amount
+      'Transaction Type',
+      'Transaction ID',
+    ];
+
+    // Sample data rows to guide users
+    const sampleRows = [
+      [
+        '2025-01-15',           // Date (YYYY-MM-DD format)
+        'John',                 // First Name
+        'Doe',                  // Last Name
+        '701-1234567890',       // Acc Number
+        'Retirement Fund',      // Goal Name
+        '701-1234567890a',      // Goal Number
+        '1000000',              // Total Amount (UGX)
+        '25',                   // XUMMF % (percentage)
+        '25',                   // XUBF %
+        '25',                   // XUDEF %
+        '25',                   // XUREF %
+        '250000',               // XUMMF $ (amount)
+        '250000',               // XUBF $
+        '250000',               // XUDEF $
+        '250000',               // XUREF $
+        'DEPOSIT',              // Transaction Type (DEPOSIT/WITHDRAWAL/REDEMPTION/TRANSFER)
+        'TXN123456789',         // Transaction ID (from bank statement)
+      ],
+      [
+        '2025-01-16',
+        'Jane',
+        'Smith',
+        '701-9876543210',
+        'Education Savings',
+        '701-9876543210b',
+        '500000',
+        '30',
+        '30',
+        '20',
+        '20',
+        '150000',
+        '150000',
+        '100000',
+        '100000',
+        'DEPOSIT',
+        'TXN987654321',
+      ],
+    ];
+
+    // Build CSV content
+    const csvContent = [
+      headers.join(','),
+      ...sampleRows.map(row => row.join(',')),
+    ].join('\n');
+
+    // Add instructions as comments at the top
+    const instructions = `# Bank Transaction Upload Template
+# ================================
+# Instructions:
+# 1. Date: Use YYYY-MM-DD format (e.g., 2025-01-15)
+# 2. First Name / Last Name: Client's name as registered
+# 3. Acc Number: Account number in format XXX-XXXXXXXXXX
+# 4. Goal Name: Name of the investment goal
+# 5. Goal Number: Goal number (account number + letter suffix)
+# 6. Total Amount: Total transaction amount in UGX
+# 7. Fund Percentages (XUMMF%, XUBF%, XUDEF%, XUREF%): Must total 100%
+# 8. Fund Amounts: Individual amounts per fund (must total to Total Amount)
+# 9. Transaction Type: DEPOSIT, WITHDRAWAL, REDEMPTION, or TRANSFER
+# 10. Transaction ID: Unique ID from bank statement
+#
+# Note: The fund columns appear twice - first for percentages, then for amounts
+# Delete these instruction lines before uploading
+#
+`;
+
+    const fullCsvContent = instructions + csvContent;
+
+    // Set response headers for file download
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', 'attachment; filename="bank_transactions_template.csv"');
+    res.send(fullCsvContent);
+
+    logger.info('Bank transaction template downloaded');
+  } catch (error: any) {
+    logger.error('Error generating bank template:', error);
+    res.status(500).json({
+      success: false,
+      error: 'Failed to generate template',
+      message: error.message,
+    });
+  }
+});
+
+/**
  * POST /api/bank-reconciliation/upload
  * Upload bank transaction CSV file for reconciliation
+ * Returns immediately with batch ID - processing happens in background
  */
 router.post(
   '/upload',
@@ -69,7 +183,7 @@ router.post(
         return;
       }
 
-      logger.info(`Bank transaction upload started: ${req.file.originalname}`);
+      logger.info(`Bank transaction upload queued: ${req.file.originalname}`);
 
       // Parse metadata if provided as JSON string
       let parsedMetadata;
@@ -82,8 +196,8 @@ router.post(
         }
       }
 
-      // Process upload
-      const result = await reconciliationService.processUpload(
+      // Upload and save bank transactions (no queue, direct processing)
+      const result = await reconciliationService.uploadBankTransactions(
         req.file.path,
         req.file.originalname,
         uploadedBy,
@@ -93,10 +207,10 @@ router.post(
       res.status(200).json({
         success: true,
         data: result,
-        message: 'Bank transaction upload processed successfully',
+        message: result.message,
       });
     } catch (error: any) {
-      logger.error('Error processing bank upload:', error);
+      logger.error('Error queueing bank upload:', error);
 
       // Clean up file if it exists
       if (req.file) {
@@ -109,7 +223,34 @@ router.post(
 
       res.status(500).json({
         success: false,
-        error: 'Failed to process bank upload',
+        error: 'Failed to queue bank upload',
+        message: error.message,
+      });
+    }
+  }
+);
+
+/**
+ * GET /api/bank-reconciliation/batches/:batchId/status
+ * Get processing status for a batch (for polling)
+ */
+router.get(
+  '/batches/:batchId/status',
+  async (req: Request, res: Response): Promise<void> => {
+    try {
+      const { batchId } = req.params;
+
+      const status = await reconciliationService.getBatchStatus(batchId);
+
+      res.status(200).json({
+        success: true,
+        data: status,
+      });
+    } catch (error: any) {
+      logger.error('Error getting batch status:', error);
+      res.status(404).json({
+        success: false,
+        error: 'Failed to get batch status',
         message: error.message,
       });
     }

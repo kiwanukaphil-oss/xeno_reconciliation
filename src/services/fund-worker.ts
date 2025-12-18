@@ -2,9 +2,10 @@ import { Worker, Job } from 'bullmq';
 import { connection, JobNames } from '../config/queue';
 import { logger } from '../config/logger';
 import { FundFileProcessor } from './fund-upload/FundFileProcessor';
+import { BankFileProcessor } from './bank-upload/BankFileProcessor';
 
 /**
- * Background worker for processing fund transaction uploads
+ * Background worker for processing fund transaction uploads AND bank uploads
  */
 
 interface JobData {
@@ -12,7 +13,7 @@ interface JobData {
   filePath: string;
 }
 
-// Create worker
+// Create worker for fund processing
 const worker = new Worker(
   'fund-processing',
   async (job: Job<JobData>) => {
@@ -53,32 +54,80 @@ const worker = new Worker(
   }
 );
 
-// Event handlers
+// Event handlers for fund worker
 worker.on('completed', (job) => {
-  logger.info(`Job ${job.id} completed`, job.returnvalue);
+  logger.info(`Fund job ${job.id} completed`, job.returnvalue);
 });
 
 worker.on('failed', (job, err) => {
-  logger.error(`Job ${job?.id} failed:`, err);
+  logger.error(`Fund job ${job?.id} failed:`, err);
 });
 
 worker.on('error', (err) => {
-  logger.error('Worker error:', err);
+  logger.error('Fund worker error:', err);
+});
+
+// =====================================================
+// Bank Upload Worker (mirrors fund upload pattern)
+// =====================================================
+const bankWorker = new Worker(
+  'bank-reconciliation',
+  async (job: Job<JobData>) => {
+    const { batchId, filePath } = job.data;
+
+    logger.info(`Processing bank job ${job.id}: ${job.name} for batch ${batchId}`);
+
+    try {
+      switch (job.name) {
+        case JobNames.PROCESS_BANK_UPLOAD:
+          // Use the new BankFileProcessor (mirrors FundFileProcessor)
+          await BankFileProcessor.processFile(batchId, filePath);
+          logger.info(`Bank upload job ${job.id} completed for batch ${batchId}`);
+          return { success: true, batchId };
+
+        default:
+          throw new Error(`Unknown bank job name: ${job.name}`);
+      }
+    } catch (error: any) {
+      logger.error(`Bank job ${job.id} failed:`, error);
+      throw error;
+    }
+  },
+  {
+    connection,
+    concurrency: 2, // Process up to 2 bank files concurrently
+    lockDuration: 600000, // 10 minutes lock duration for large file processing
+    lockRenewTime: 300000, // Renew lock every 5 minutes
+  }
+);
+
+// Event handlers for bank worker
+bankWorker.on('completed', (job) => {
+  logger.info(`Bank job ${job.id} completed`, job.returnvalue);
+});
+
+bankWorker.on('failed', (job, err) => {
+  logger.error(`Bank job ${job?.id} failed:`, err);
+});
+
+bankWorker.on('error', (err) => {
+  logger.error('Bank worker error:', err);
 });
 
 // Graceful shutdown
 process.on('SIGTERM', async () => {
-  logger.info('SIGTERM received, closing worker...');
-  await worker.close();
+  logger.info('SIGTERM received, closing workers...');
+  await Promise.all([worker.close(), bankWorker.close()]);
   process.exit(0);
 });
 
 process.on('SIGINT', async () => {
-  logger.info('SIGINT received, closing worker...');
-  await worker.close();
+  logger.info('SIGINT received, closing workers...');
+  await Promise.all([worker.close(), bankWorker.close()]);
   process.exit(0);
 });
 
 logger.info('Fund processing worker started');
+logger.info('Bank reconciliation worker started');
 
 export default worker;

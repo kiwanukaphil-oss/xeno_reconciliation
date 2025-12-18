@@ -66,7 +66,10 @@
       "Bash(ping:*)",
       "Bash(del NUL 2)",
       "Bash(.gitignore)",
-      "Bash(SET PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1)"
+      "Bash(SET PRISMA_ENGINES_CHECKSUM_IGNORE_MISSING=1)",
+      "Bash(set PGPASSWORD=Pkiwan01!)",
+      "Bash(pg_dump:*)",
+      "Bash(npx tsc:*)"
     ],
     "deny": [],
     "ask": []

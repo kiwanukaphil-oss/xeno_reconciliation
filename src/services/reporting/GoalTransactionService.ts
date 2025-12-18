@@ -92,17 +92,49 @@ export class GoalTransactionService {
     }
 
     // Add search functionality across multiple fields
+    // Split search into words and match ALL words (in any order) for name searches
     if (filters.search) {
-      const searchPattern = `%${filters.search}%`;
-      whereClauses.push(`(
-        "clientName" ILIKE $${paramIndex} OR
-        "accountNumber" ILIKE $${paramIndex} OR
-        "goalTitle" ILIKE $${paramIndex} OR
-        "goalNumber" ILIKE $${paramIndex} OR
-        "goalTransactionCode" ILIKE $${paramIndex}
-      )`);
-      params.push(searchPattern);
-      paramIndex++;
+      const searchTerm = filters.search.trim();
+      const searchWords = searchTerm.split(/\s+/).filter(w => w.length > 0);
+
+      if (searchWords.length > 1) {
+        // Multi-word search: all words must be present in clientName (any order)
+        // OR the full term matches other fields
+        const nameConditions = searchWords.map((_, idx) => {
+          const wordParamIdx = paramIndex + idx;
+          return `"clientName" ILIKE $${wordParamIdx}`;
+        });
+
+        // Add word patterns for name matching
+        searchWords.forEach(word => {
+          params.push(`%${word}%`);
+        });
+        paramIndex += searchWords.length;
+
+        // Full pattern for other fields
+        const fullPattern = `%${searchTerm}%`;
+        whereClauses.push(`(
+          (${nameConditions.join(' AND ')}) OR
+          "accountNumber" ILIKE $${paramIndex} OR
+          "goalTitle" ILIKE $${paramIndex} OR
+          "goalNumber" ILIKE $${paramIndex} OR
+          "goalTransactionCode" ILIKE $${paramIndex}
+        )`);
+        params.push(fullPattern);
+        paramIndex++;
+      } else {
+        // Single word search: simple ILIKE on all fields
+        const searchPattern = `%${searchTerm}%`;
+        whereClauses.push(`(
+          "clientName" ILIKE $${paramIndex} OR
+          "accountNumber" ILIKE $${paramIndex} OR
+          "goalTitle" ILIKE $${paramIndex} OR
+          "goalNumber" ILIKE $${paramIndex} OR
+          "goalTransactionCode" ILIKE $${paramIndex}
+        )`);
+        params.push(searchPattern);
+        paramIndex++;
+      }
     }
 
     // Build query
@@ -409,17 +441,49 @@ export class GoalTransactionService {
     }
 
     // Add search functionality across multiple fields
+    // Split search into words and match ALL words (in any order) for name searches
     if (filters.search) {
-      const searchPattern = `%${filters.search}%`;
-      whereClauses.push(`(
-        "clientName" ILIKE $${paramIndex} OR
-        "accountNumber" ILIKE $${paramIndex} OR
-        "goalTitle" ILIKE $${paramIndex} OR
-        "goalNumber" ILIKE $${paramIndex} OR
-        "goalTransactionCode" ILIKE $${paramIndex}
-      )`);
-      params.push(searchPattern);
-      paramIndex++;
+      const searchTerm = filters.search.trim();
+      const searchWords = searchTerm.split(/\s+/).filter(w => w.length > 0);
+
+      if (searchWords.length > 1) {
+        // Multi-word search: all words must be present in clientName (any order)
+        // OR the full term matches other fields
+        const nameConditions = searchWords.map((_, idx) => {
+          const wordParamIdx = paramIndex + idx;
+          return `"clientName" ILIKE $${wordParamIdx}`;
+        });
+
+        // Add word patterns for name matching
+        searchWords.forEach(word => {
+          params.push(`%${word}%`);
+        });
+        paramIndex += searchWords.length;
+
+        // Full pattern for other fields
+        const fullPattern = `%${searchTerm}%`;
+        whereClauses.push(`(
+          (${nameConditions.join(' AND ')}) OR
+          "accountNumber" ILIKE $${paramIndex} OR
+          "goalTitle" ILIKE $${paramIndex} OR
+          "goalNumber" ILIKE $${paramIndex} OR
+          "goalTransactionCode" ILIKE $${paramIndex}
+        )`);
+        params.push(fullPattern);
+        paramIndex++;
+      } else {
+        // Single word search: simple ILIKE on all fields
+        const searchPattern = `%${searchTerm}%`;
+        whereClauses.push(`(
+          "clientName" ILIKE $${paramIndex} OR
+          "accountNumber" ILIKE $${paramIndex} OR
+          "goalTitle" ILIKE $${paramIndex} OR
+          "goalNumber" ILIKE $${paramIndex} OR
+          "goalTransactionCode" ILIKE $${paramIndex}
+        )`);
+        params.push(searchPattern);
+        paramIndex++;
+      }
     }
 
     const whereClause = whereClauses.length > 0 ? `WHERE ${whereClauses.join(' AND ')}` : '';

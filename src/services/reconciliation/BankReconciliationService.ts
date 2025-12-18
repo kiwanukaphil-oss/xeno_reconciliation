@@ -1,15 +1,24 @@
 import { PrismaClient, ProcessingStatus, ValidationStatus } from '@prisma/client';
 import { logger } from '../../config/logger';
 import { BankCSVParser } from './BankCSVParser';
-import { BankReconciliationMatcher, MatchResult } from './BankReconciliationMatcher';
+import { BankReconciliationMatcher } from './BankReconciliationMatcher';
 import { ParsedBankTransaction, ValidatedBankTransaction } from '../../types/bankTransaction';
 import fs from 'fs/promises';
-import path from 'path';
 
 const prisma = new PrismaClient();
 
 /**
- * Result of bank upload processing
+ * Result of bank upload queue operation (immediate response)
+ */
+export interface BankUploadQueueResult {
+  batchId: string;
+  batchNumber: string;
+  status: string;
+  message: string;
+}
+
+/**
+ * Result of bank upload processing (after background processing completes)
  */
 export interface BankUploadResult {
   batchId: string;
@@ -37,18 +46,17 @@ export class BankReconciliationService {
   }
 
   /**
-   * Processes a bank transaction upload file
+   * Uploads and saves bank transactions (Step 1 - just save, no reconciliation)
+   * Reconciliation is done separately via reconcilePeriod()
    */
-  async processUpload(
+  async uploadBankTransactions(
     filePath: string,
     fileName: string,
     uploadedBy: string,
     metadata?: any
-  ): Promise<BankUploadResult> {
-    let batchId: string | null = null;
-
+  ): Promise<BankUploadQueueResult> {
     try {
-      logger.info(`Starting bank upload processing: ${fileName}`);
+      logger.info(`Processing bank upload: ${fileName}`);
 
       // Validate file structure
       const structureValidation = await BankCSVParser.validateFileStructure(filePath);
@@ -75,8 +83,136 @@ export class BankReconciliationService {
         },
       });
 
-      batchId = batch.id;
-      logger.info(`Created bank upload batch: ${batch.batchNumber} (${batchId})`);
+      logger.info(`Created bank upload batch: ${batch.batchNumber} (${batch.id})`);
+
+      // Parse CSV file
+      const parsedTransactions = await BankCSVParser.parseFile(filePath);
+      logger.info(`Parsed ${parsedTransactions.length} bank transactions`);
+
+      // Update batch with total records
+      await prisma.bankUploadBatch.update({
+        where: { id: batch.id },
+        data: {
+          totalRecords: parsedTransactions.length,
+          processingStatus: ProcessingStatus.VALIDATING,
+        },
+      });
+
+      // Validate and save transactions (without reconciliation)
+      const savedCount = await this.saveBankTransactions(parsedTransactions, batch.id);
+
+      // Update batch status to completed
+      await prisma.bankUploadBatch.update({
+        where: { id: batch.id },
+        data: {
+          processingStatus: ProcessingStatus.COMPLETED,
+          processedRecords: savedCount,
+          processingCompletedAt: new Date(),
+        },
+      });
+
+      logger.info(`Bank upload completed: ${batch.batchNumber} - ${savedCount} transactions saved`);
+
+      return {
+        batchId: batch.id,
+        batchNumber: batch.batchNumber,
+        status: 'COMPLETED',
+        message: `Successfully uploaded ${savedCount} bank transactions. Use the Reconcile feature to match with fund transactions.`,
+      };
+    } catch (error) {
+      logger.error('Error processing bank upload:', error);
+      throw error;
+    }
+  }
+
+  /**
+   * Saves bank transactions without reconciliation
+   */
+  private async saveBankTransactions(
+    transactions: ParsedBankTransaction[],
+    batchId: string
+  ): Promise<number> {
+    const BATCH_SIZE = 500;
+    let savedCount = 0;
+
+    for (let i = 0; i < transactions.length; i += BATCH_SIZE) {
+      const batch = transactions.slice(i, i + BATCH_SIZE);
+
+      // Resolve entity IDs and save
+      for (const transaction of batch) {
+        try {
+          // Find account
+          const account = await prisma.account.findUnique({
+            where: { accountNumber: transaction.accountNumber },
+          });
+
+          if (!account) {
+            logger.warn(`Row ${transaction.rowNumber}: Account not found: ${transaction.accountNumber}`);
+            continue;
+          }
+
+          // Find goal
+          const goal = await prisma.goal.findUnique({
+            where: { goalNumber: transaction.goalNumber },
+          });
+
+          if (!goal) {
+            logger.warn(`Row ${transaction.rowNumber}: Goal not found: ${transaction.goalNumber}`);
+            continue;
+          }
+
+          // Save bank transaction (without reconciliation status)
+          await prisma.bankGoalTransaction.create({
+            data: {
+              clientId: account.clientId,
+              accountId: account.id,
+              goalId: goal.id,
+              uploadBatchId: batchId,
+              transactionDate: transaction.transactionDate,
+              transactionType: transaction.transactionType as any,
+              transactionId: transaction.transactionId,
+              firstName: transaction.firstName,
+              lastName: transaction.lastName,
+              goalTitle: transaction.goalTitle,
+              goalNumber: transaction.goalNumber,
+              totalAmount: transaction.totalAmount,
+              xummfPercentage: transaction.xummfPercentage / 100,
+              xubfPercentage: transaction.xubfPercentage / 100,
+              xudefPercentage: transaction.xudefPercentage / 100,
+              xurefPercentage: transaction.xurefPercentage / 100,
+              xummfAmount: transaction.xummfAmount,
+              xubfAmount: transaction.xubfAmount,
+              xudefAmount: transaction.xudefAmount,
+              xurefAmount: transaction.xurefAmount,
+              reconciliationStatus: 'PENDING', // Will be updated during reconciliation
+              rowNumber: transaction.rowNumber,
+            },
+          });
+
+          savedCount++;
+        } catch (error) {
+          logger.error(`Row ${transaction.rowNumber}: Error saving:`, error);
+        }
+      }
+
+      logger.info(`Saved batch: ${savedCount}/${transactions.length}`);
+    }
+
+    return savedCount;
+  }
+
+  /**
+   * Processes a bank transaction upload file (called by worker)
+   */
+  async processUpload(batchId: string, filePath: string): Promise<BankUploadResult> {
+    try {
+      logger.info(`Starting bank upload processing for batch: ${batchId}`);
+
+      // Update status to PARSING
+      await prisma.bankUploadBatch.update({
+        where: { id: batchId },
+        data: { processingStatus: ProcessingStatus.PARSING },
+      });
 
       // Parse CSV file
       const parsedTransactions = await BankCSVParser.parseFile(filePath);
@@ -107,11 +243,16 @@ export class BankReconciliationService {
         },
       });
 
-      // Process and match transactions
-      const result = await this.processTransactions(
+      // Process and match transactions in batches
+      const result = await this.processTransactionsInBatches(
         validatedTransactions,
         batchId
       );
+
+      // Get batch for batchNumber
+      const batch = await prisma.bankUploadBatch.findUnique({
+        where: { id: batchId },
+      });
 
       // Update batch with final statistics
       await prisma.bankUploadBatch.update({
@@ -133,32 +274,31 @@ export class BankReconciliationService {
         },
       });
 
-      logger.info(`Bank upload processing completed: ${batch.batchNumber}`);
+      logger.info(`Bank upload processing completed: ${batch?.batchNumber}`);
 
       return {
-        batchId: batch.id,
-        batchNumber: batch.batchNumber,
+        batchId,
+        batchNumber: batch?.batchNumber || '',
+        totalRecords: parsedTransactions.length,
         ...result,
       };
     } catch (error) {
       logger.error('Error processing bank upload:', error);
 
       // Update batch status to failed
-      if (batchId) {
-        await prisma.bankUploadBatch.update({
-          where: { id: batchId },
-          data: {
-            processingStatus: ProcessingStatus.FAILED,
-            validationStatus: ValidationStatus.FAILED,
-            validationErrors: [
-              {
-                message: error instanceof Error ? error.message : 'Unknown error',
-                timestamp: new Date().toISOString(),
-              },
-            ],
-          },
-        });
-      }
+      await prisma.bankUploadBatch.update({
+        where: { id: batchId },
+        data: {
+          processingStatus: ProcessingStatus.FAILED,
+          validationStatus: ValidationStatus.FAILED,
+          validationErrors: [
+            {
+              message: error instanceof Error ? error.message : 'Unknown error',
+              timestamp: new Date().toISOString(),
+            },
+          ],
+        },
+      });
 
       throw error;
     }
@@ -246,9 +386,10 @@ export class BankReconciliationService {
   }
 
   /**
-   * Processes validated transactions - matches and saves to database
+   * Processes validated transactions in batches - matches and saves to database
+   * Uses batch processing to avoid timeouts on large datasets
    */
-  private async processTransactions(
+  private async processTransactionsInBatches(
     transactions: ValidatedBankTransaction[],
     batchId: string
   ): Promise<{
@@ -261,6 +402,7 @@ export class BankReconciliationService {
     manualReviewCount: number;
     errors: string[];
   }> {
+    const BATCH_SIZE = 100; // Process 100 transactions at a time
     let processedRecords = 0;
     let failedRecords = 0;
     let totalMatched = 0;
@@ -270,81 +412,107 @@ export class BankReconciliationService {
     let manualReviewCount = 0;
     const errors: string[] = [];
 
-    for (const transaction of transactions) {
-      try {
-        // Match with fund transactions
-        const matchResult = await this.matcher.matchTransaction(transaction);
+    const totalBatches = Math.ceil(transactions.length / BATCH_SIZE);
+    logger.info(`Processing ${transactions.length} transactions in ${totalBatches} batches`);
 
-        // Save bank goal transaction
-        const bankGoalTransaction = await prisma.bankGoalTransaction.create({
-          data: {
-            clientId: transaction.clientId,
-            accountId: transaction.accountId,
-            goalId: transaction.goalId,
-            uploadBatchId: batchId,
-            transactionDate: transaction.transactionDate,
-            transactionType: transaction.transactionType,
-            transactionId: transaction.transactionId,
-            firstName: transaction.firstName,
-            lastName: transaction.lastName,
-            goalTitle: transaction.goalTitle,
-            goalNumber: transaction.goalNumber,
-            totalAmount: transaction.totalAmount,
-            xummfPercentage: transaction.fundPercentages.XUMMF,
-            xubfPercentage: transaction.fundPercentages.XUBF,
-            xudefPercentage: transaction.fundPercentages.XUDEF,
-            xurefPercentage: transaction.fundPercentages.XUREF,
-            xummfAmount: transaction.fundAmounts.XUMMF,
-            xubfAmount: transaction.fundAmounts.XUBF,
-            xudefAmount: transaction.fundAmounts.XUDEF,
-            xurefAmount: transaction.fundAmounts.XUREF,
-            reconciliationStatus: matchResult.status,
-            matchedGoalTransactionCode: matchResult.goalTransactionCode,
-            matchedAt: matchResult.matched ? new Date() : null,
-            matchScore: matchResult.matchScore,
-            rowNumber: transaction.rowNumber,
+    for (let batchIndex = 0; batchIndex < totalBatches; batchIndex++) {
+      const start = batchIndex * BATCH_SIZE;
+      const end = Math.min(start + BATCH_SIZE, transactions.length);
+      const batch = transactions.slice(start, end);
+
+      logger.info(`Processing batch ${batchIndex + 1}/${totalBatches} (rows ${start + 1}-${end})`);
+
+      // Update batch progress
+      await prisma.bankUploadBatch.update({
+        where: { id: batchId },
+        data: {
+          processedRecords,
+          metadata: {
+            currentBatch: batchIndex + 1,
+            totalBatches,
+            progress: Math.round((processedRecords / transactions.length) * 100),
           },
-        });
+        },
+      });
 
-        // Save variances
-        for (const variance of matchResult.variances) {
-          await prisma.reconciliationVariance.create({
+      for (const transaction of batch) {
+        try {
+          // Match with fund transactions
+          const matchResult = await this.matcher.matchTransaction(transaction);
+
+          // Save bank goal transaction
+          const bankGoalTransaction = await prisma.bankGoalTransaction.create({
             data: {
-              bankGoalTransactionId: bankGoalTransaction.id,
-              varianceType: variance.type,
-              varianceSeverity: variance.severity,
-              description: variance.description,
-              expectedValue: variance.expectedValue,
-              actualValue: variance.actualValue,
-              differenceAmount: variance.differenceAmount,
-              differencePercentage: variance.differencePercentage,
-              fundCode: variance.fundCode,
-              fundExpectedAmount: variance.fundExpectedAmount,
-              fundActualAmount: variance.fundActualAmount,
-              expectedDate: variance.expectedDate,
-              actualDate: variance.actualDate,
-              dateDifferenceDays: variance.dateDifferenceDays,
-              autoApproved: variance.autoApproved,
-              autoApprovalReason: variance.autoApprovalReason,
-              resolutionStatus: variance.autoApproved ? 'AUTO_APPROVED' : 'PENDING',
+              clientId: transaction.clientId,
+              accountId: transaction.accountId,
+              goalId: transaction.goalId,
+              uploadBatchId: batchId,
+              transactionDate: transaction.transactionDate,
+              transactionType: transaction.transactionType as any,
+              transactionId: transaction.transactionId,
+              firstName: transaction.firstName,
+              lastName: transaction.lastName,
+              goalTitle: transaction.goalTitle,
+              goalNumber: transaction.goalNumber,
+              totalAmount: transaction.totalAmount,
+              xummfPercentage: transaction.xummfPercentage / 100,
+              xubfPercentage: transaction.xubfPercentage / 100,
+              xudefPercentage: transaction.xudefPercentage / 100,
+              xurefPercentage: transaction.xurefPercentage / 100,
+              xummfAmount: transaction.xummfAmount,
+              xubfAmount: transaction.xubfAmount,
+              xudefAmount: transaction.xudefAmount,
+              xurefAmount: transaction.xurefAmount,
+              reconciliationStatus: matchResult.status,
+              matchedGoalTransactionCode: matchResult.goalTransactionCode,
+              matchedAt: matchResult.matched ? new Date() : null,
+              matchScore: matchResult.matchScore,
+              rowNumber: transaction.rowNumber,
             },
           });
-        }
 
-        processedRecords++;
-        if (matchResult.matched) totalMatched++;
-        else totalUnmatched++;
-        totalVariances += matchResult.variances.length;
-        if (matchResult.autoApproved) autoApprovedCount++;
-        else if (matchResult.matched) manualReviewCount++;
-      } catch (error) {
-        failedRecords++;
-        const errorMsg = `Row ${transaction.rowNumber}: ${
-          error instanceof Error ? error.message : 'Processing error'
-        }`;
-        errors.push(errorMsg);
-        logger.error(errorMsg, error);
+          // Save variances in bulk if there are many
+          if (matchResult.variances.length > 0) {
+            await prisma.reconciliationVariance.createMany({
+              data: matchResult.variances.map((variance) => ({
+                bankGoalTransactionId: bankGoalTransaction.id,
+                varianceType: variance.type,
+                varianceSeverity: variance.severity,
+                description: variance.description,
+                expectedValue: variance.expectedValue,
+                actualValue: variance.actualValue,
+                differenceAmount: variance.differenceAmount,
+                differencePercentage: variance.differencePercentage,
+                fundCode: variance.fundCode,
+                fundExpectedAmount: variance.fundExpectedAmount,
+                fundActualAmount: variance.fundActualAmount,
+                expectedDate: variance.expectedDate,
+                actualDate: variance.actualDate,
+                dateDifferenceDays: variance.dateDifferenceDays,
+                autoApproved: variance.autoApproved,
+                autoApprovalReason: variance.autoApprovalReason,
+                resolutionStatus: variance.autoApproved ? 'AUTO_APPROVED' : 'PENDING',
+              })),
+            });
+          }
+
+          processedRecords++;
+          if (matchResult.matched) totalMatched++;
+          else totalUnmatched++;
+          totalVariances += matchResult.variances.length;
+          if (matchResult.autoApproved) autoApprovedCount++;
+          else if (matchResult.matched) manualReviewCount++;
+        } catch (error) {
+          failedRecords++;
+          const errorMsg = `Row ${transaction.rowNumber}: ${
+            error instanceof Error ? error.message : 'Processing error'
+          }`;
+          errors.push(errorMsg);
+          logger.error(errorMsg, error);
+        }
       }
+
+      logger.info(`Batch ${batchIndex + 1}/${totalBatches} completed. Progress: ${processedRecords}/${transactions.length}`);
     }
 
     return {
@@ -356,6 +524,48 @@ export class BankReconciliationService {
       autoApprovedCount,
       manualReviewCount,
       errors,
+    };
+  }
+
+  /**
+   * Gets batch status for polling
+   */
+  async getBatchStatus(batchId: string): Promise<{
+    id: string;
+    batchNumber: string;
+    status: string;
+    progress: number;
+    totalRecords: number;
+    processedRecords: number;
+    failedRecords: number;
+    totalMatched: number;
+    totalUnmatched: number;
+    errors: any[];
+  }> {
+    const batch = await prisma.bankUploadBatch.findUnique({
+      where: { id: batchId },
+    });
+
+    if (!batch) {
+      throw new Error(`Batch not found: ${batchId}`);
+    }
+
+    const metadata = (batch.metadata as any) || {};
+    const progress = batch.totalRecords > 0
+      ? Math.round((batch.processedRecords / batch.totalRecords) * 100)
+      : 0;
+
+    return {
+      id: batch.id,
+      batchNumber: batch.batchNumber,
+      status: batch.processingStatus,
+      progress: metadata.progress || progress,
+      totalRecords: batch.totalRecords,
+      processedRecords: batch.processedRecords,
+      failedRecords: batch.failedRecords,
+      totalMatched: batch.totalMatched,
+      totalUnmatched: batch.totalUnmatched,
+      errors: (batch.validationErrors as any[]) || [],
     };
   }
 
