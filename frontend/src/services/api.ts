@@ -244,11 +244,6 @@ export const getBankBatchSummary = async (batchId: string) => {
   return handleResponse(response);
 };
 
-export const getBankReconciliationReport = async (batchId: string) => {
-  const response = await fetch(`${API_URL}/api/bank-reconciliation/batches/${batchId}/report`);
-  return handleResponse(response);
-};
-
 export const getReconciliationVariances = async (
   limit: number = 50,
   offset: number = 0,
@@ -410,5 +405,194 @@ export const runBankReconciliation = async (transactionIds?: string[], batchSize
 
 export const getBankReconciliationStats = async () => {
   const response = await fetch(`${API_URL}/api/bank-upload/reconciliation/stats`);
+  return handleResponse(response);
+};
+
+// Transaction Comparison API
+export const fetchTransactionComparison = async (params: {
+  startDate?: string;
+  endDate?: string;
+  goalNumber?: string;
+  accountNumber?: string;
+  clientSearch?: string;
+  matchStatus?: string;
+  page?: number;
+  limit?: number;
+}) => {
+  const queryParams = new URLSearchParams();
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
+  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
+  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.matchStatus) queryParams.append("matchStatus", params.matchStatus);
+  if (params.page) queryParams.append("page", params.page.toString());
+  if (params.limit) queryParams.append("limit", params.limit.toString());
+
+  const response = await fetch(`${API_URL}/api/bank-upload/comparison?${queryParams}`);
+  return handleResponse(response);
+};
+
+export const exportTransactionComparisonCSV = async (params: {
+  startDate?: string;
+  endDate?: string;
+  goalNumber?: string;
+  accountNumber?: string;
+  clientSearch?: string;
+  matchStatus?: string;
+}) => {
+  const queryParams = new URLSearchParams();
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
+  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
+  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.matchStatus) queryParams.append("matchStatus", params.matchStatus);
+
+  const response = await fetch(`${API_URL}/api/bank-upload/comparison/export?${queryParams}`);
+  if (!response.ok) {
+    throw new Error("Failed to export comparison data");
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `transaction_comparison_${new Date().toISOString().split("T")[0]}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+};
+
+// =============================================================================
+// Goal Comparison APIs (Smart Matching)
+// =============================================================================
+
+export const fetchGoalComparison = async (params: {
+  startDate?: string;
+  endDate?: string;
+  goalNumber?: string;
+  accountNumber?: string;
+  clientSearch?: string;
+  status?: string;
+  page?: number;
+  limit?: number;
+}) => {
+  const queryParams = new URLSearchParams();
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
+  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
+  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.status) queryParams.append("status", params.status);
+  if (params.page) queryParams.append("page", params.page.toString());
+  if (params.limit) queryParams.append("limit", params.limit.toString());
+
+  const response = await fetch(`${API_URL}/api/goal-comparison?${queryParams}`);
+  return handleResponse(response);
+};
+
+export const fetchGoalTransactionsWithMatching = async (
+  goalNumber: string,
+  params: {
+    startDate?: string;
+    endDate?: string;
+    transactionType?: string;
+  }
+) => {
+  const queryParams = new URLSearchParams();
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.transactionType) queryParams.append("transactionType", params.transactionType);
+
+  const response = await fetch(`${API_URL}/api/goal-comparison/${encodeURIComponent(goalNumber)}/transactions?${queryParams}`);
+  return handleResponse(response);
+};
+
+export const exportGoalComparisonCSV = async (params: {
+  startDate?: string;
+  endDate?: string;
+  goalNumber?: string;
+  accountNumber?: string;
+  clientSearch?: string;
+  status?: string;
+}) => {
+  const queryParams = new URLSearchParams();
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
+  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
+  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.status) queryParams.append("status", params.status);
+
+  const response = await fetch(`${API_URL}/api/goal-comparison/export/csv?${queryParams}`);
+  if (!response.ok) {
+    throw new Error("Failed to export goal comparison data");
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `goal_comparison_${new Date().toISOString().split("T")[0]}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+};
+
+export interface SmartMatchingResult {
+  success: boolean;
+  message: string;
+  totalGoals: number;
+  processedGoals: number;
+  goalsInBatch: number;
+  goalsWithMatches: number;
+  hasMore: boolean;
+  nextOffset: number | null;
+  totalMatches: number;
+  totalUpdated: number;
+  matchBreakdown: {
+    exact: number;
+    amount: number;
+    split: number;
+  };
+  dateRange: {
+    startDate: string;
+    endDate: string;
+  };
+  results: { goalNumber: string; matches: number; updated: number }[];
+}
+
+export const runSmartMatching = async (params: {
+  startDate?: string;
+  endDate?: string;
+  applyUpdates?: boolean;
+  batchSize?: number;
+  offset?: number;
+}): Promise<SmartMatchingResult> => {
+  const response = await fetch(`${API_URL}/api/goal-comparison/run-matching`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(params),
+  });
+  return handleResponse(response);
+};
+
+export const applyGoalMatches = async (
+  goalNumber: string,
+  params: {
+    startDate?: string;
+    endDate?: string;
+    transactionType?: string;
+  }
+) => {
+  const queryParams = new URLSearchParams();
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.transactionType) queryParams.append("transactionType", params.transactionType);
+
+  const response = await fetch(`${API_URL}/api/goal-comparison/${encodeURIComponent(goalNumber)}/apply-matches?${queryParams}`, {
+    method: "POST",
+  });
   return handleResponse(response);
 };

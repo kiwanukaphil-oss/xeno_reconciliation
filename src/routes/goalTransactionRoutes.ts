@@ -21,6 +21,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
       startDate: req.query.startDate ? new Date(req.query.startDate as string) : undefined,
       endDate: req.query.endDate ? new Date(req.query.endDate as string) : undefined,
       transactionType: req.query.transactionType as string,
+      transactionId: req.query.transactionId as string,
+      source: req.query.source as string,
       search: req.query.search as string,
     };
 
@@ -111,6 +113,8 @@ router.get('/export/csv', async (req: Request, res: Response, next: NextFunction
       goalId: req.query.goalId as string,
       startDate: req.query.startDate ? new Date(req.query.startDate as string) : undefined,
       endDate: req.query.endDate ? new Date(req.query.endDate as string) : undefined,
+      transactionId: req.query.transactionId as string,
+      source: req.query.source as string,
       search: req.query.search as string,
     };
 

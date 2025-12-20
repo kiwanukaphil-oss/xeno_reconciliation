@@ -13,6 +13,7 @@ import unitRegistryRoutes from './routes/unitRegistryRoutes';
 import dashboardRoutes from './routes/dashboardRoutes';
 import bankReconciliationRoutes from './routes/bankReconciliationRoutes';
 import bankUploadRoutes from './routes/bankUploadRoutes';
+import goalComparisonRoutes from './routes/goalComparisonRoutes';
 
 const app = express();
 
@@ -45,6 +46,7 @@ app.use('/api/unit-registry', unitRegistryRoutes);
 app.use('/api/dashboard', dashboardRoutes);
 app.use('/api/bank-reconciliation', bankReconciliationRoutes);
 app.use('/api/bank-upload', bankUploadRoutes);
+app.use('/api/goal-comparison', goalComparisonRoutes);
 
 // 404 handler
 app.use(notFoundHandler);

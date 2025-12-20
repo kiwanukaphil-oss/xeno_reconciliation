@@ -11,9 +11,10 @@ import {
   Users,
   DollarSign,
   Wallet,
-  GitCompare,
   AlertTriangle,
   Building2,
+  Scale,
+  Target,
 } from "lucide-react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
@@ -29,8 +30,9 @@ import BankTransactions from "./components/transactions/BankTransactions";
 import ApprovalQueue from "./components/approval/ApprovalQueue";
 import { FundPrices } from "./components/fund-price/FundPrices";
 import { UnitRegistry } from "./components/unit-registry/UnitRegistry";
-import BankReconciliation from "./components/reconciliation/BankReconciliation";
 import VarianceReview from "./components/reconciliation/VarianceReview";
+import TransactionComparison from "./components/comparison/TransactionComparison";
+import GoalComparison from "./components/comparison/GoalComparison";
 
 const App = () => {
   const [activeModule, setActiveModule] = useState("dashboard");
@@ -56,16 +58,22 @@ const App = () => {
       description: "Upload bank transaction files",
     },
     {
-      id: "bank-reconciliation",
-      name: "Bank Reconciliation",
-      icon: GitCompare,
-      description: "Reconcile bank transactions with fund system",
-    },
-    {
       id: "variance-review",
       name: "Variance Review",
       icon: AlertTriangle,
       description: "Review and resolve variances",
+    },
+    {
+      id: "goal-comparison",
+      name: "Goal Comparison",
+      icon: Target,
+      description: "Compare totals by goal with smart matching",
+    },
+    {
+      id: "transaction-comparison",
+      name: "Transaction Comparison",
+      icon: Scale,
+      description: "Compare bank and fund transactions",
     },
     {
       id: "fund-prices",
@@ -119,10 +127,12 @@ const App = () => {
         return <FundUpload />;
       case "bank-upload":
         return <BankUpload />;
-      case "bank-reconciliation":
-        return <BankReconciliation />;
       case "variance-review":
         return <VarianceReview />;
+      case "goal-comparison":
+        return <GoalComparison />;
+      case "transaction-comparison":
+        return <TransactionComparison />;
       case "fund-prices":
         return <FundPrices />;
       case "unit-registry":

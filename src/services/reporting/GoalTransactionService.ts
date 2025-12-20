@@ -10,6 +10,8 @@ import { GoalTransactionCodeGenerator } from '../fund-upload/calculators/GoalTra
 export interface GoalTransactionSummary {
   goalTransactionCode: string;
   transactionDate: Date;
+  transactionId: string | null;
+  source: string | null;
   clientName: string;
   accountNumber: string;
   goalTitle: string;
@@ -50,6 +52,8 @@ export class GoalTransactionService {
     startDate?: Date;
     endDate?: Date;
     transactionType?: string;
+    transactionId?: string;
+    source?: string;
     search?: string;
     limit?: number;
     offset?: number;
@@ -79,6 +83,16 @@ export class GoalTransactionService {
     if (filters.transactionType) {
       whereClauses.push(`"transactionType" = $${paramIndex++}`);
       params.push(filters.transactionType);
+    }
+
+    if (filters.transactionId) {
+      whereClauses.push(`"transactionId" ILIKE $${paramIndex++}`);
+      params.push(`%${filters.transactionId}%`);
+    }
+
+    if (filters.source) {
+      whereClauses.push(`"source" = $${paramIndex++}`);
+      params.push(filters.source);
     }
 
     if (filters.startDate) {
@@ -149,6 +163,8 @@ export class GoalTransactionService {
       SELECT
         "goalTransactionCode",
         "transactionDate",
+        "transactionId",
+        "source",
         "clientId",
         "clientName",
         "accountId",
@@ -180,6 +196,8 @@ export class GoalTransactionService {
     return results.map((row) => ({
       goalTransactionCode: row.goalTransactionCode,
       transactionDate: row.transactionDate,
+      transactionId: row.transactionId || null,
+      source: row.source || null,
       clientName: row.clientName,
       accountNumber: row.accountNumber,
       goalTitle: row.goalTitle,
@@ -258,6 +276,8 @@ export class GoalTransactionService {
       const summary: GoalTransactionSummary = {
         goalTransactionCode: code,
         transactionDate: first.transactionDate,
+        transactionId: first.transactionId || null,
+        source: first.source || null,
         clientName: first.client.clientName,
         accountNumber: first.account.accountNumber,
         goalTitle: first.goal.goalTitle,
@@ -306,6 +326,8 @@ export class GoalTransactionService {
       SELECT
         "goalTransactionCode",
         "transactionDate",
+        "transactionId",
+        "source",
         "clientId",
         "clientName",
         "accountId",
@@ -335,6 +357,8 @@ export class GoalTransactionService {
     return {
       goalTransactionCode: row.goalTransactionCode,
       transactionDate: row.transactionDate,
+      transactionId: row.transactionId || null,
+      source: row.source || null,
       clientName: row.clientName,
       accountNumber: row.accountNumber,
       goalTitle: row.goalTitle,
@@ -396,6 +420,8 @@ export class GoalTransactionService {
     startDate?: Date;
     endDate?: Date;
     transactionType?: string;
+    transactionId?: string;
+    source?: string;
     search?: string;
   }): Promise<{
     totalCount: number;
@@ -428,6 +454,16 @@ export class GoalTransactionService {
     if (filters.transactionType) {
       whereClauses.push(`"transactionType" = $${paramIndex++}`);
       params.push(filters.transactionType);
+    }
+
+    if (filters.transactionId) {
+      whereClauses.push(`"transactionId" ILIKE $${paramIndex++}`);
+      params.push(`%${filters.transactionId}%`);
+    }
+
+    if (filters.source) {
+      whereClauses.push(`"source" = $${paramIndex++}`);
+      params.push(filters.source);
     }
 
     if (filters.startDate) {
@@ -522,6 +558,8 @@ export class GoalTransactionService {
     goalId?: string;
     startDate?: Date;
     endDate?: Date;
+    transactionId?: string;
+    source?: string;
     search?: string;
   }): Promise<string> {
     const goalTransactions = await this.getGoalTransactions(filters);

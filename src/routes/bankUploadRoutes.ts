@@ -556,4 +556,474 @@ router.get('/reconciliation/stats', async (_req: Request, res: Response, next: N
   }
 });
 
+/**
+ * Get transaction comparison data for investigating variances
+ * GET /api/bank-upload/comparison
+ *
+ * Compares bank transactions with fund transactions side-by-side
+ * Groups bank transactions by goalNumber + transactionId to handle multiple
+ * transactions with same transactionId (e.g., 2 withdrawals on same day)
+ *
+ * OPTIMIZED: Uses database-level aggregation to avoid heap overflow
+ */
+router.get('/comparison', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { prisma } = await import('../config/database');
+
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const goalNumber = req.query.goalNumber as string;
+    const accountNumber = req.query.accountNumber as string;
+    const clientSearch = req.query.clientSearch as string;
+    const matchStatus = req.query.matchStatus as string;
+
+    const skip = (page - 1) * limit;
+
+    // Build SQL WHERE conditions for bank transactions
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (startDate) {
+      conditions.push(`b."transactionDate" >= $${paramIndex}`);
+      params.push(new Date(startDate));
+      paramIndex++;
+    }
+
+    if (endDate) {
+      conditions.push(`b."transactionDate" <= $${paramIndex}`);
+      params.push(new Date(endDate));
+      paramIndex++;
+    }
+
+    if (goalNumber) {
+      conditions.push(`b."goalNumber" ILIKE $${paramIndex}`);
+      params.push(`%${goalNumber}%`);
+      paramIndex++;
+    }
+
+    if (accountNumber) {
+      conditions.push(`a."accountNumber" ILIKE $${paramIndex}`);
+      params.push(`%${accountNumber}%`);
+      paramIndex++;
+    }
+
+    if (clientSearch) {
+      const searchWords = clientSearch.trim().split(/\s+/);
+      const wordConditions = searchWords.map((word) => {
+        const cond = `(b."firstName" ILIKE $${paramIndex} OR b."lastName" ILIKE $${paramIndex})`;
+        params.push(`%${word}%`);
+        paramIndex++;
+        return cond;
+      });
+      conditions.push(`(${wordConditions.join(' AND ')})`);
+    }
+
+    // Filter by reconciliation status at DB level for proper pagination
+    // Cast to text for comparison since reconciliationStatus is an enum
+    if (matchStatus && matchStatus !== 'ALL') {
+      conditions.push(`b."reconciliationStatus"::text = $${paramIndex}`);
+      params.push(matchStatus);
+      paramIndex++;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // Step 1: Get aggregated bank transaction groups using raw SQL (paginated)
+    // Note: Table names use snake_case as per Prisma @@map directives
+    const aggregatedBankQuery = `
+      SELECT
+        b."goalNumber",
+        b."transactionId",
+        MIN(b."transactionDate") as "transactionDate",
+        MIN(b."firstName") as "firstName",
+        MIN(b."lastName") as "lastName",
+        MIN(b."goalTitle") as "goalTitle",
+        MIN(a."accountNumber") as "accountNumber",
+        COUNT(*)::int as "txnCount",
+        SUM(b."totalAmount")::float as "totalAmount",
+        SUM(b."xummfAmount")::float as "xummfAmount",
+        SUM(b."xubfAmount")::float as "xubfAmount",
+        SUM(b."xudefAmount")::float as "xudefAmount",
+        SUM(b."xurefAmount")::float as "xurefAmount",
+        ARRAY_AGG(b."id") as "ids",
+        MAX(CASE
+          WHEN b."reconciliationStatus" = 'VARIANCE_DETECTED' THEN 2
+          WHEN b."reconciliationStatus" = 'MANUAL_REVIEW' THEN 1
+          ELSE 0
+        END) as "statusPriority",
+        MAX(b."reconciliationStatus") as "reconciliationStatus"
+      FROM bank_goal_transactions b
+      LEFT JOIN accounts a ON b."accountId" = a."id"
+      ${whereClause}
+      GROUP BY b."goalNumber", b."transactionId"
+      ORDER BY MIN(b."transactionDate") DESC
+      LIMIT $${paramIndex} OFFSET $${paramIndex + 1}
+    `;
+
+    params.push(limit, skip);
+
+    // Step 2: Get total count of groups
+    const countQuery = `
+      SELECT COUNT(*) as total FROM (
+        SELECT b."goalNumber", b."transactionId"
+        FROM bank_goal_transactions b
+        LEFT JOIN accounts a ON b."accountId" = a."id"
+        ${whereClause}
+        GROUP BY b."goalNumber", b."transactionId"
+      ) as grouped
+    `;
+
+    const [bankGroups, countResult] = await Promise.all([
+      prisma.$queryRawUnsafe(aggregatedBankQuery, ...params) as Promise<any[]>,
+      prisma.$queryRawUnsafe(countQuery, ...params.slice(0, -2)) as Promise<any[]>,
+    ]);
+
+    const totalGroups = parseInt(countResult[0]?.total || '0');
+
+    // Step 3: For each bank group, get matching fund transactions (only for current page)
+    const comparisonData = await Promise.all(
+      bankGroups.map(async (bankGroup: any) => {
+        const matchKey = `${bankGroup.goalNumber}-${bankGroup.transactionId}`;
+
+        // Find fund transactions by goalNumber + transactionId
+        const fundTransactions = await prisma.fundTransaction.findMany({
+          where: {
+            goal: { goalNumber: bankGroup.goalNumber },
+            transactionId: bankGroup.transactionId,
+          },
+          include: {
+            fund: { select: { fundCode: true } },
+            client: { select: { clientName: true } },
+          },
+        });
+
+        // Aggregate fund amounts by fund code
+        const fundAmounts: Record<string, number> = { XUMMF: 0, XUBF: 0, XUDEF: 0, XUREF: 0 };
+        let fundTotalAmount = 0;
+        let fundTransactionDate: Date | null = null;
+        let fundClientName = '';
+        let fundGoalTransactionCode = '';
+
+        for (const ft of fundTransactions) {
+          const amount = Number(ft.amount);
+          fundAmounts[ft.fund.fundCode] = (fundAmounts[ft.fund.fundCode] || 0) + amount;
+          fundTotalAmount += amount;
+          if (!fundTransactionDate) fundTransactionDate = ft.transactionDate;
+          if (!fundClientName) fundClientName = ft.client.clientName;
+          if (!fundGoalTransactionCode) fundGoalTransactionCode = ft.goalTransactionCode;
+        }
+
+        // Calculate variances (aggregated bank vs aggregated fund)
+        const bankTotalAmount = Number(bankGroup.totalAmount);
+        const bankXummfAmount = Number(bankGroup.xummfAmount);
+        const bankXubfAmount = Number(bankGroup.xubfAmount);
+        const bankXudefAmount = Number(bankGroup.xudefAmount);
+        const bankXurefAmount = Number(bankGroup.xurefAmount);
+
+        const totalDiff = bankTotalAmount - fundTotalAmount;
+        const xummfDiff = bankXummfAmount - fundAmounts.XUMMF;
+        const xubfDiff = bankXubfAmount - fundAmounts.XUBF;
+        const xudefDiff = bankXudefAmount - fundAmounts.XUDEF;
+        const xurefDiff = bankXurefAmount - fundAmounts.XUREF;
+
+        // Determine match status
+        let calculatedMatchStatus: string;
+        if (fundTransactions.length === 0) {
+          calculatedMatchStatus = 'MISSING_IN_FUND';
+        } else if (Math.abs(totalDiff) <= Math.max(fundTotalAmount * 0.01, 1000)) {
+          calculatedMatchStatus = 'MATCHED';
+        } else {
+          calculatedMatchStatus = 'VARIANCE_DETECTED';
+        }
+
+        return {
+          matchKey,
+          matchStatus: calculatedMatchStatus,
+          bankTransactionCount: bankGroup.txnCount,
+          bank: {
+            ids: bankGroup.ids,
+            transactionDate: bankGroup.transactionDate,
+            clientName: `${bankGroup.firstName} ${bankGroup.lastName}`,
+            accountNumber: bankGroup.accountNumber || '',
+            goalNumber: bankGroup.goalNumber,
+            goalTitle: bankGroup.goalTitle,
+            transactionId: bankGroup.transactionId,
+            totalAmount: bankTotalAmount,
+            xummfAmount: bankXummfAmount,
+            xubfAmount: bankXubfAmount,
+            xudefAmount: bankXudefAmount,
+            xurefAmount: bankXurefAmount,
+            reconciliationStatus: bankGroup.reconciliationStatus,
+          },
+          fund: fundTransactions.length > 0 ? {
+            goalTransactionCode: fundGoalTransactionCode,
+            transactionDate: fundTransactionDate,
+            clientName: fundClientName,
+            totalAmount: fundTotalAmount,
+            xummfAmount: fundAmounts.XUMMF,
+            xubfAmount: fundAmounts.XUBF,
+            xudefAmount: fundAmounts.XUDEF,
+            xurefAmount: fundAmounts.XUREF,
+            fundCount: fundTransactions.length,
+          } : null,
+          variance: {
+            totalDiff,
+            xummfDiff,
+            xubfDiff,
+            xudefDiff,
+            xurefDiff,
+            hasVariance: Math.abs(totalDiff) > Math.max(fundTotalAmount * 0.01, 1000),
+          },
+        };
+      })
+    );
+
+    // Note: matchStatus filtering is now done at DB level for proper pagination
+    const filteredData = comparisonData;
+
+    // Calculate aggregates from current page data
+    let bankTotal = 0;
+    let fundTotal = 0;
+    let matchedCount = 0;
+    let varianceCount = 0;
+    let missingInFundCount = 0;
+
+    for (const row of filteredData) {
+      bankTotal += row.bank.totalAmount;
+      fundTotal += row.fund?.totalAmount || 0;
+      if (row.matchStatus === 'MATCHED') matchedCount++;
+      else if (row.matchStatus === 'VARIANCE_DETECTED') varianceCount++;
+      else if (row.matchStatus === 'MISSING_IN_FUND') missingInFundCount++;
+    }
+
+    const varianceAmount = Math.abs(bankTotal - fundTotal);
+    const matchRate = filteredData.length > 0 ? (matchedCount / filteredData.length) * 100 : 0;
+
+    res.json({
+      success: true,
+      data: filteredData,
+      aggregates: {
+        bankTotal,
+        fundTotal,
+        varianceAmount,
+        matchedCount,
+        varianceCount,
+        missingInFundCount,
+        matchRate: Math.round(matchRate * 100) / 100,
+      },
+      pagination: {
+        page,
+        limit,
+        total: totalGroups,
+        totalPages: Math.ceil(totalGroups / limit),
+      },
+    });
+  } catch (error) {
+    logger.error('Error fetching comparison data:', error);
+    next(error);
+  }
+});
+
+/**
+ * Export comparison data as CSV
+ * GET /api/bank-upload/comparison/export
+ *
+ * Groups bank transactions by goalNumber + transactionId to handle multiple
+ * transactions with same transactionId (e.g., 2 withdrawals on same day)
+ *
+ * OPTIMIZED: Uses database-level aggregation and batched processing to avoid heap overflow
+ */
+router.get('/comparison/export', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { prisma } = await import('../config/database');
+
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const goalNumber = req.query.goalNumber as string;
+    const accountNumber = req.query.accountNumber as string;
+    const clientSearch = req.query.clientSearch as string;
+    const matchStatus = req.query.matchStatus as string;
+
+    // Build SQL WHERE conditions
+    const conditions: string[] = [];
+    const params: any[] = [];
+    let paramIndex = 1;
+
+    if (startDate) {
+      conditions.push(`b."transactionDate" >= $${paramIndex}`);
+      params.push(new Date(startDate));
+      paramIndex++;
+    }
+
+    if (endDate) {
+      conditions.push(`b."transactionDate" <= $${paramIndex}`);
+      params.push(new Date(endDate));
+      paramIndex++;
+    }
+
+    if (goalNumber) {
+      conditions.push(`b."goalNumber" ILIKE $${paramIndex}`);
+      params.push(`%${goalNumber}%`);
+      paramIndex++;
+    }
+
+    if (accountNumber) {
+      conditions.push(`a."accountNumber" ILIKE $${paramIndex}`);
+      params.push(`%${accountNumber}%`);
+      paramIndex++;
+    }
+
+    if (clientSearch) {
+      const searchWords = clientSearch.trim().split(/\s+/);
+      const wordConditions = searchWords.map((word) => {
+        const cond = `(b."firstName" ILIKE $${paramIndex} OR b."lastName" ILIKE $${paramIndex})`;
+        params.push(`%${word}%`);
+        paramIndex++;
+        return cond;
+      });
+      conditions.push(`(${wordConditions.join(' AND ')})`);
+    }
+
+    // Filter by reconciliation status at DB level
+    // Cast to text for comparison since reconciliationStatus is an enum
+    if (matchStatus && matchStatus !== 'ALL') {
+      conditions.push(`b."reconciliationStatus"::text = $${paramIndex}`);
+      params.push(matchStatus);
+      paramIndex++;
+    }
+
+    const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
+
+    // Get aggregated bank transaction groups using raw SQL
+    // Note: Table names use snake_case as per Prisma @@map directives
+    const aggregatedBankQuery = `
+      SELECT
+        b."goalNumber",
+        b."transactionId",
+        MIN(b."transactionDate") as "transactionDate",
+        MIN(b."firstName") as "firstName",
+        MIN(b."lastName") as "lastName",
+        MIN(a."accountNumber") as "accountNumber",
+        COUNT(*)::int as "txnCount",
+        SUM(b."totalAmount")::float as "totalAmount",
+        SUM(b."xummfAmount")::float as "xummfAmount",
+        SUM(b."xubfAmount")::float as "xubfAmount",
+        SUM(b."xudefAmount")::float as "xudefAmount",
+        SUM(b."xurefAmount")::float as "xurefAmount"
+      FROM bank_goal_transactions b
+      LEFT JOIN accounts a ON b."accountId" = a."id"
+      ${whereClause}
+      GROUP BY b."goalNumber", b."transactionId"
+      ORDER BY MIN(b."transactionDate") DESC
+    `;
+
+    const bankGroups = await prisma.$queryRawUnsafe(aggregatedBankQuery, ...params) as any[];
+
+    // Build CSV headers
+    const headers = [
+      'Goal Number',
+      'Transaction ID',
+      'Date',
+      'Client Name',
+      'Account',
+      'Bank Txn Count',
+      'Match Status',
+      'Bank Total',
+      'Fund Total',
+      'Variance',
+      'Bank XUMMF',
+      'Fund XUMMF',
+      'XUMMF Diff',
+      'Bank XUBF',
+      'Fund XUBF',
+      'XUBF Diff',
+      'Bank XUDEF',
+      'Fund XUDEF',
+      'XUDEF Diff',
+      'Bank XUREF',
+      'Fund XUREF',
+      'XUREF Diff',
+    ].join(',');
+
+    // Process in batches to avoid memory issues
+    const BATCH_SIZE = 100;
+    const rows: string[] = [];
+
+    for (let i = 0; i < bankGroups.length; i += BATCH_SIZE) {
+      const batch = bankGroups.slice(i, i + BATCH_SIZE);
+
+      const batchResults = await Promise.all(
+        batch.map(async (bankGroup: any) => {
+          // Find fund transactions
+          const fundTransactions = await prisma.fundTransaction.findMany({
+            where: {
+              goal: { goalNumber: bankGroup.goalNumber },
+              transactionId: bankGroup.transactionId,
+            },
+            include: { fund: { select: { fundCode: true } } },
+          });
+
+          const fundAmounts: Record<string, number> = { XUMMF: 0, XUBF: 0, XUDEF: 0, XUREF: 0 };
+          let fundTotalAmount = 0;
+          for (const ft of fundTransactions) {
+            fundAmounts[ft.fund.fundCode] = (fundAmounts[ft.fund.fundCode] || 0) + Number(ft.amount);
+            fundTotalAmount += Number(ft.amount);
+          }
+
+          const bankTotalAmount = Number(bankGroup.totalAmount);
+          const bankXummfAmount = Number(bankGroup.xummfAmount);
+          const bankXubfAmount = Number(bankGroup.xubfAmount);
+          const bankXudefAmount = Number(bankGroup.xudefAmount);
+          const bankXurefAmount = Number(bankGroup.xurefAmount);
+
+          const totalDiff = bankTotalAmount - fundTotalAmount;
+          const matchStatusValue = fundTransactions.length === 0 ? 'MISSING_IN_FUND' :
+            Math.abs(totalDiff) <= Math.max(fundTotalAmount * 0.01, 1000) ? 'MATCHED' : 'VARIANCE_DETECTED';
+
+          // Note: matchStatus filtering is now done at DB level
+          return [
+            bankGroup.goalNumber,
+            bankGroup.transactionId,
+            new Date(bankGroup.transactionDate).toISOString().split('T')[0],
+            `"${bankGroup.firstName} ${bankGroup.lastName}"`,
+            bankGroup.accountNumber || '',
+            bankGroup.txnCount,
+            matchStatusValue,
+            bankTotalAmount,
+            fundTotalAmount,
+            totalDiff,
+            bankXummfAmount,
+            fundAmounts.XUMMF,
+            bankXummfAmount - fundAmounts.XUMMF,
+            bankXubfAmount,
+            fundAmounts.XUBF,
+            bankXubfAmount - fundAmounts.XUBF,
+            bankXudefAmount,
+            fundAmounts.XUDEF,
+            bankXudefAmount - fundAmounts.XUDEF,
+            bankXurefAmount,
+            fundAmounts.XUREF,
+            bankXurefAmount - fundAmounts.XUREF,
+          ].join(',');
+        })
+      );
+
+      // Add results to rows
+      rows.push(...batchResults);
+    }
+
+    const csvContent = [headers, ...rows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader('Content-Disposition', `attachment; filename="transaction_comparison_${new Date().toISOString().split('T')[0]}.csv"`);
+    res.send(csvContent);
+  } catch (error) {
+    logger.error('Error exporting comparison data:', error);
+    next(error);
+  }
+});
+
 export default router;

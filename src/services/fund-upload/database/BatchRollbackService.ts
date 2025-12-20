@@ -22,7 +22,7 @@ export class BatchRollbackService {
     logger.info(`Starting rollback for batch ${batchId}`);
 
     try {
-      // Get batch info
+      // Get batch info first (outside transaction for validation)
       const batch = await prisma.uploadBatch.findUnique({
         where: { id: batchId },
       });
@@ -38,17 +38,6 @@ export class BatchRollbackService {
 
       logger.info(`Batch ${batch.batchNumber} - Status: ${batch.processingStatus}`);
 
-      // Step 1: Get all fund transactions for this batch
-      const fundTransactions = await prisma.fundTransaction.findMany({
-        where: { uploadBatchId: batchId },
-        select: {
-          id: true,
-          goalId: true,
-          accountId: true,
-          clientId: true,
-        },
-      });
-
       const deletedCounts = {
         fundTransactions: 0,
         goals: 0,
@@ -56,72 +45,97 @@ export class BatchRollbackService {
         clients: 0,
       };
 
-      logger.info(`Found ${fundTransactions.length} fund transactions to delete`);
+      // Run all deletions in a transaction to ensure atomicity
+      await prisma.$transaction(async (tx) => {
+        // Step 1: Get all fund transactions for this batch
+        const fundTransactions = await tx.fundTransaction.findMany({
+          where: { uploadBatchId: batchId },
+          select: {
+            id: true,
+            goalId: true,
+            accountId: true,
+            clientId: true,
+          },
+        });
 
-      if (fundTransactions.length > 0) {
-        // Extract unique IDs
-        const goalIds = [...new Set(fundTransactions.map(t => t.goalId))];
-        const accountIds = [...new Set(fundTransactions.map(t => t.accountId))];
-        const clientIds = [...new Set(fundTransactions.map(t => t.clientId))];
+        logger.info(`Found ${fundTransactions.length} fund transactions to delete`);
 
-        // Step 2: Delete fund transactions
-        const deletedTransactions = await prisma.fundTransaction.deleteMany({
+        if (fundTransactions.length > 0) {
+          // Extract unique IDs
+          const goalIds = [...new Set(fundTransactions.map(t => t.goalId))];
+          const accountIds = [...new Set(fundTransactions.map(t => t.accountId))];
+          const clientIds = [...new Set(fundTransactions.map(t => t.clientId))];
+
+          // Step 2: Delete fund transactions
+          const deletedTransactions = await tx.fundTransaction.deleteMany({
+            where: { uploadBatchId: batchId },
+          });
+          deletedCounts.fundTransactions = deletedTransactions.count;
+          logger.info(`Deleted ${deletedCounts.fundTransactions} fund transactions`);
+
+          // Step 3: Delete orphaned goals (goals with no remaining fund transactions AND no bank transactions)
+          for (const goalId of goalIds) {
+            const remainingFundTransactions = await tx.fundTransaction.count({
+              where: { goalId },
+            });
+
+            if (remainingFundTransactions === 0) {
+              // Also check if there are any bank_goal_transactions referencing this goal
+              const remainingBankTransactions = await tx.bankGoalTransaction.count({
+                where: { goalId },
+              });
+
+              if (remainingBankTransactions === 0) {
+                await tx.goal.delete({ where: { id: goalId } });
+                deletedCounts.goals++;
+              } else {
+                logger.info(`Goal ${goalId} has ${remainingBankTransactions} bank transactions, skipping deletion`);
+              }
+            }
+          }
+          logger.info(`Deleted ${deletedCounts.goals} orphaned goals`);
+
+          // Step 4: Delete orphaned accounts (accounts with no remaining goals)
+          for (const accountId of accountIds) {
+            const remainingGoals = await tx.goal.count({
+              where: { accountId },
+            });
+
+            if (remainingGoals === 0) {
+              await tx.account.delete({ where: { id: accountId } });
+              deletedCounts.accounts++;
+            }
+          }
+          logger.info(`Deleted ${deletedCounts.accounts} orphaned accounts`);
+
+          // Step 5: Delete orphaned clients (clients with no remaining accounts)
+          for (const clientId of clientIds) {
+            const remainingAccounts = await tx.account.count({
+              where: { clientId },
+            });
+
+            if (remainingAccounts === 0) {
+              await tx.client.delete({ where: { id: clientId } });
+              deletedCounts.clients++;
+            }
+          }
+          logger.info(`Deleted ${deletedCounts.clients} orphaned clients`);
+        }
+
+        // Step 6: Delete invalid transactions if any
+        const deletedInvalid = await tx.invalidFundTransaction.deleteMany({
           where: { uploadBatchId: batchId },
         });
-        deletedCounts.fundTransactions = deletedTransactions.count;
-        logger.info(`Deleted ${deletedCounts.fundTransactions} fund transactions`);
+        logger.info(`Deleted ${deletedInvalid.count} invalid fund transactions`);
 
-        // Step 3: Delete orphaned goals (goals with no remaining transactions)
-        for (const goalId of goalIds) {
-          const remainingTransactions = await prisma.fundTransaction.count({
-            where: { goalId },
-          });
-
-          if (remainingTransactions === 0) {
-            await prisma.goal.delete({ where: { id: goalId } });
-            deletedCounts.goals++;
-          }
-        }
-        logger.info(`Deleted ${deletedCounts.goals} orphaned goals`);
-
-        // Step 4: Delete orphaned accounts (accounts with no remaining goals)
-        for (const accountId of accountIds) {
-          const remainingGoals = await prisma.goal.count({
-            where: { accountId },
-          });
-
-          if (remainingGoals === 0) {
-            await prisma.account.delete({ where: { id: accountId } });
-            deletedCounts.accounts++;
-          }
-        }
-        logger.info(`Deleted ${deletedCounts.accounts} orphaned accounts`);
-
-        // Step 5: Delete orphaned clients (clients with no remaining accounts)
-        for (const clientId of clientIds) {
-          const remainingAccounts = await prisma.account.count({
-            where: { clientId },
-          });
-
-          if (remainingAccounts === 0) {
-            await prisma.client.delete({ where: { id: clientId } });
-            deletedCounts.clients++;
-          }
-        }
-        logger.info(`Deleted ${deletedCounts.clients} orphaned clients`);
-      }
-
-      // Step 6: Delete invalid transactions if any
-      const deletedInvalid = await prisma.invalidFundTransaction.deleteMany({
-        where: { uploadBatchId: batchId },
+        // Step 7: Delete the upload batch itself
+        await tx.uploadBatch.delete({
+          where: { id: batchId },
+        });
+        logger.info(`Deleted upload batch ${batch.batchNumber}`);
+      }, {
+        timeout: 120000, // 2 minute timeout for large batches
       });
-      logger.info(`Deleted ${deletedInvalid.count} invalid fund transactions`);
-
-      // Step 7: Delete the upload batch itself
-      await prisma.uploadBatch.delete({
-        where: { id: batchId },
-      });
-      logger.info(`Deleted upload batch ${batch.batchNumber}`);
 
       // Step 8: Refresh all materialized views
       logger.info('Refreshing all materialized views after rollback');

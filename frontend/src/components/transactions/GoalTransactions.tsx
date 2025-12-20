@@ -17,6 +17,8 @@ import { fetchGoalTransactions, exportGoalTransactionsCSV } from "../../services
 interface GoalTransaction {
   goalTransactionCode: string;
   transactionDate: string;
+  transactionId: string | null;
+  source: string | null;
   clientName: string;
   accountNumber: string;
   goalNumber: string;
@@ -28,6 +30,19 @@ interface GoalTransaction {
   XUREF: number;
   fundTransactionCount: number;
 }
+
+// Valid transaction sources
+const TRANSACTION_SOURCES = [
+  "BANK",
+  "MTN_MOMO",
+  "AIRTEL_MONEY",
+  "MTN_APP",
+  "MTN_WEB",
+  "MTN_USSD",
+  "AIRTEL_APP",
+  "AIRTEL_WEB",
+  "Transfer_Reversal",
+] as const;
 
 interface Aggregates {
   totalCount: number;
@@ -59,6 +74,8 @@ const GoalTransactions = () => {
   const [searchTerm, setSearchTerm] = useState("");
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
+  const [transactionId, setTransactionId] = useState("");
+  const [source, setSource] = useState("");
   const [exporting, setExporting] = useState(false);
 
   // Fetch goal transactions on component mount
@@ -75,6 +92,8 @@ const GoalTransactions = () => {
       if (startDate) params.append("startDate", startDate);
       if (endDate) params.append("endDate", endDate);
       if (searchTerm) params.append("search", searchTerm);
+      if (transactionId) params.append("transactionId", transactionId);
+      if (source) params.append("source", source);
       params.append("page", page.toString());
       params.append("limit", pagination.limit.toString());
 
@@ -103,6 +122,8 @@ const GoalTransactions = () => {
       if (startDate) params.append("startDate", startDate);
       if (endDate) params.append("endDate", endDate);
       if (searchTerm) params.append("search", searchTerm);
+      if (transactionId) params.append("transactionId", transactionId);
+      if (source) params.append("source", source);
 
       const blob = await exportGoalTransactionsCSV(params);
       const url = window.URL.createObjectURL(blob);
@@ -129,6 +150,8 @@ const GoalTransactions = () => {
     setSearchTerm("");
     setStartDate("");
     setEndDate("");
+    setTransactionId("");
+    setSource("");
     fetchTransactions(1); // Reset to page 1 when resetting
   };
 
@@ -263,7 +286,7 @@ const GoalTransactions = () => {
         </div>
 
         {/* Filters */}
-        <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-6 gap-4">
           {/* Search */}
           <div className="md:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -279,6 +302,39 @@ const GoalTransactions = () => {
                 className="pl-10 w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
               />
             </div>
+          </div>
+
+          {/* Transaction ID */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Transaction ID
+            </label>
+            <input
+              type="text"
+              value={transactionId}
+              onChange={(e) => setTransactionId(e.target.value)}
+              placeholder="Enter transaction ID..."
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            />
+          </div>
+
+          {/* Source */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Source
+            </label>
+            <select
+              value={source}
+              onChange={(e) => setSource(e.target.value)}
+              className="w-full px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+            >
+              <option value="">All Sources</option>
+              {TRANSACTION_SOURCES.map((src) => (
+                <option key={src} value={src}>
+                  {src.replace(/_/g, " ")}
+                </option>
+              ))}
+            </select>
           </div>
 
           {/* Start Date */}
@@ -451,6 +507,12 @@ const GoalTransactions = () => {
                   <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
                     XUREF
                   </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Transaction ID
+                  </th>
+                  <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
+                    Source
+                  </th>
                 </tr>
               </thead>
               <tbody className="bg-white divide-y divide-gray-200">
@@ -490,6 +552,14 @@ const GoalTransactions = () => {
                     </td>
                     <td className="px-6 py-4 whitespace-nowrap text-sm text-right text-teal-600">
                       {formatCurrency(transaction.XUREF || 0)}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                      {transaction.transactionId || "-"}
+                    </td>
+                    <td className="px-6 py-4 whitespace-nowrap text-sm text-gray-600">
+                      <span className="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-800">
+                        {transaction.source?.replace(/_/g, " ") || "-"}
+                      </span>
                     </td>
                   </tr>
                 ))}
