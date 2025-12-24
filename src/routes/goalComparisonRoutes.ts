@@ -194,6 +194,197 @@ router.get('/:goalNumber/transactions', async (req: Request, res: Response, next
 });
 
 /**
+ * Get fund-level comparison summary
+ * GET /api/goal-comparison/fund-summary
+ *
+ * Returns aggregated NET amounts per fund (XUMMF, XUBF, XUDEF, XUREF) for each goal
+ * with variance calculations
+ */
+router.get('/fund-summary', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const goalNumber = req.query.goalNumber as string;
+    const accountNumber = req.query.accountNumber as string;
+    const clientSearch = req.query.clientSearch as string;
+    const status = req.query.status as 'ALL' | 'MATCHED' | 'VARIANCE';
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+
+    // Default to last 30 days if no dates provided
+    const end = endDate ? new Date(endDate) : new Date();
+    const start = startDate ? new Date(startDate) : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    logger.info('Fetching fund comparison summary', {
+      startDate: start.toISOString(),
+      endDate: end.toISOString(),
+      filters: { goalNumber, accountNumber, clientSearch, status },
+    });
+
+    const result = await SmartMatcher.getFundSummary(start, end, {
+      goalNumber,
+      accountNumber,
+      clientSearch,
+      status,
+    });
+
+    // Apply pagination
+    const skip = (page - 1) * limit;
+    const paginatedData = result.data.slice(skip, skip + limit);
+
+    // Calculate overall aggregates
+    let totalBankXUMMF = 0;
+    let totalBankXUBF = 0;
+    let totalBankXUDEF = 0;
+    let totalBankXUREF = 0;
+    let totalBankAmount = 0;
+    let totalGoalXUMMF = 0;
+    let totalGoalXUBF = 0;
+    let totalGoalXUDEF = 0;
+    let totalGoalXUREF = 0;
+    let totalGoalAmount = 0;
+    let matchedCount = 0;
+    let varianceCount = 0;
+
+    for (const row of result.data) {
+      totalBankXUMMF += row.bankXUMMF;
+      totalBankXUBF += row.bankXUBF;
+      totalBankXUDEF += row.bankXUDEF;
+      totalBankXUREF += row.bankXUREF;
+      totalBankAmount += row.bankTotal;
+      totalGoalXUMMF += row.goalXUMMF;
+      totalGoalXUBF += row.goalXUBF;
+      totalGoalXUDEF += row.goalXUDEF;
+      totalGoalXUREF += row.goalXUREF;
+      totalGoalAmount += row.goalTotal;
+      if (row.status === 'MATCHED') matchedCount++;
+      else varianceCount++;
+    }
+
+    res.json({
+      success: true,
+      data: paginatedData,
+      aggregates: {
+        totalBankXUMMF,
+        totalGoalXUMMF,
+        xummfVariance: totalBankXUMMF - totalGoalXUMMF,
+        totalBankXUBF,
+        totalGoalXUBF,
+        xubfVariance: totalBankXUBF - totalGoalXUBF,
+        totalBankXUDEF,
+        totalGoalXUDEF,
+        xudefVariance: totalBankXUDEF - totalGoalXUDEF,
+        totalBankXUREF,
+        totalGoalXUREF,
+        xurefVariance: totalBankXUREF - totalGoalXUREF,
+        totalBankAmount,
+        totalGoalAmount,
+        totalVariance: totalBankAmount - totalGoalAmount,
+        matchedCount,
+        varianceCount,
+        matchRate: result.total > 0 ? Math.round((matchedCount / result.total) * 10000) / 100 : 0,
+      },
+      pagination: {
+        page,
+        limit,
+        total: result.total,
+        totalPages: Math.ceil(result.total / limit),
+      },
+      dateRange: {
+        startDate: start.toISOString().split('T')[0],
+        endDate: end.toISOString().split('T')[0],
+      },
+    });
+  } catch (error) {
+    logger.error('Error fetching fund comparison:', error);
+    next(error);
+  }
+});
+
+/**
+ * Export fund comparison summary as CSV
+ * GET /api/goal-comparison/fund-summary/export/csv
+ */
+router.get('/fund-summary/export/csv', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const goalNumber = req.query.goalNumber as string;
+    const accountNumber = req.query.accountNumber as string;
+    const clientSearch = req.query.clientSearch as string;
+    const status = req.query.status as 'ALL' | 'MATCHED' | 'VARIANCE';
+
+    // Default to last 30 days if no dates provided
+    const end = endDate ? new Date(endDate) : new Date();
+    const start = startDate ? new Date(startDate) : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+
+    const result = await SmartMatcher.getFundSummary(start, end, {
+      goalNumber,
+      accountNumber,
+      clientSearch,
+      status,
+    });
+
+    // Build CSV
+    const headers = [
+      'Goal Number',
+      'Client Name',
+      'Account Number',
+      'Bank XUMMF',
+      'Goal XUMMF',
+      'XUMMF Variance',
+      'Bank XUBF',
+      'Goal XUBF',
+      'XUBF Variance',
+      'Bank XUDEF',
+      'Goal XUDEF',
+      'XUDEF Variance',
+      'Bank XUREF',
+      'Goal XUREF',
+      'XUREF Variance',
+      'Bank Total',
+      'Goal Total',
+      'Total Variance',
+      'Status',
+    ].join(',');
+
+    const rows = result.data.map(row => [
+      row.goalNumber,
+      `"${row.clientName}"`,
+      row.accountNumber,
+      row.bankXUMMF,
+      row.goalXUMMF,
+      row.xummfVariance,
+      row.bankXUBF,
+      row.goalXUBF,
+      row.xubfVariance,
+      row.bankXUDEF,
+      row.goalXUDEF,
+      row.xudefVariance,
+      row.bankXUREF,
+      row.goalXUREF,
+      row.xurefVariance,
+      row.bankTotal,
+      row.goalTotal,
+      row.totalVariance,
+      row.status,
+    ].join(','));
+
+    const csvContent = [headers, ...rows].join('\n');
+
+    res.setHeader('Content-Type', 'text/csv');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="fund_comparison_${start.toISOString().split('T')[0]}_to_${end.toISOString().split('T')[0]}.csv"`
+    );
+    res.send(csvContent);
+  } catch (error) {
+    logger.error('Error exporting fund comparison:', error);
+    next(error);
+  }
+});
+
+/**
  * Export goal comparison summary as CSV
  * GET /api/goal-comparison/export
  */

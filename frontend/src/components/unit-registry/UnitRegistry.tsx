@@ -546,7 +546,7 @@ export function UnitRegistry() {
                     </tr>
                   </thead>
                   <tbody>
-                    {sortedEntries.map((entry, idx) => {
+                    {sortedEntries.map((entry) => {
                       const isExpanded = expandedAccounts.has(entry.accountId);
                       const isHighlighted = matchedGoalIds.some(m => m.accountId === entry.accountId);
                       const goals = goalBreakdowns.get(entry.accountId) || [];

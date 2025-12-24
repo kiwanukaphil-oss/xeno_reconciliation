@@ -21,7 +21,13 @@ import {
   fetchGoalTransactionsWithMatching,
   exportGoalComparisonCSV,
   runSmartMatching,
+  fetchFundComparison,
+  exportFundComparisonCSV,
+} from "../../services/api";
+import type {
   SmartMatchingResult,
+  FundComparisonRow,
+  FundComparisonAggregates,
 } from "../../services/api";
 
 interface GoalSummary {
@@ -116,6 +122,10 @@ interface Pagination {
 }
 
 const GoalComparison = () => {
+  // Tab state
+  const [activeTab, setActiveTab] = useState<'goal' | 'fund'>('goal');
+
+  // Goal comparison state
   const [data, setData] = useState<GoalSummary[]>([]);
   const [aggregates, setAggregates] = useState<Aggregates | null>(null);
   const [pagination, setPagination] = useState<Pagination>({
@@ -124,6 +134,17 @@ const GoalComparison = () => {
     total: 0,
     totalPages: 0,
   });
+
+  // Fund comparison state
+  const [fundData, setFundData] = useState<FundComparisonRow[]>([]);
+  const [fundAggregates, setFundAggregates] = useState<FundComparisonAggregates | null>(null);
+  const [fundPagination, setFundPagination] = useState<Pagination>({
+    page: 1,
+    limit: 50,
+    total: 0,
+    totalPages: 0,
+  });
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -146,7 +167,7 @@ const GoalComparison = () => {
   const [batchSize, setBatchSize] = useState(100);
   const [matchingResult, setMatchingResult] = useState<SmartMatchingResult | null>(null);
   const [showMatchingResult, setShowMatchingResult] = useState(false);
-  const [currentOffset, setCurrentOffset] = useState(0);
+  const [, setCurrentOffset] = useState(0);
 
   useEffect(() => {
     // Set default date range to last 30 days
@@ -158,9 +179,13 @@ const GoalComparison = () => {
 
   useEffect(() => {
     if (startDate && endDate) {
-      fetchData();
+      if (activeTab === 'goal') {
+        fetchData();
+      } else {
+        fetchFundData();
+      }
     }
-  }, [startDate, endDate]);
+  }, [startDate, endDate, activeTab]);
 
   const fetchData = async (page: number = 1) => {
     setLoading(true);
@@ -186,10 +211,38 @@ const GoalComparison = () => {
     }
   };
 
+  const fetchFundData = async (page: number = 1) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchFundComparison({
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+        goalNumber: goalNumber || undefined,
+        accountNumber: accountNumber || undefined,
+        clientSearch: clientSearch || undefined,
+        status: status !== "ALL" ? status : undefined,
+        page,
+        limit: fundPagination.limit,
+      });
+      setFundData(result.data);
+      setFundAggregates(result.aggregates);
+      setFundPagination(result.pagination);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleApplyFilters = () => {
     setExpandedGoal(null);
     setDrilldownData(null);
-    fetchData(1);
+    if (activeTab === 'goal') {
+      fetchData(1);
+    } else {
+      fetchFundData(1);
+    }
   };
 
   const handleResetFilters = () => {
@@ -203,20 +256,31 @@ const GoalComparison = () => {
     setStatus("ALL");
     setExpandedGoal(null);
     setDrilldownData(null);
-    setTimeout(() => fetchData(1), 0);
+    setTimeout(() => {
+      if (activeTab === 'goal') {
+        fetchData(1);
+      } else {
+        fetchFundData(1);
+      }
+    }, 0);
   };
 
   const handleExport = async () => {
     setExporting(true);
     try {
-      await exportGoalComparisonCSV({
+      const exportParams = {
         startDate: startDate || undefined,
         endDate: endDate || undefined,
         goalNumber: goalNumber || undefined,
         accountNumber: accountNumber || undefined,
         clientSearch: clientSearch || undefined,
         status: status !== "ALL" ? status : undefined,
-      });
+      };
+      if (activeTab === 'goal') {
+        await exportGoalComparisonCSV(exportParams);
+      } else {
+        await exportFundComparisonCSV(exportParams);
+      }
     } catch (err) {
       alert("Failed to export: " + (err as Error).message);
     } finally {
@@ -261,6 +325,14 @@ const GoalComparison = () => {
       setExpandedGoal(null);
       setDrilldownData(null);
       fetchData(newPage);
+    }
+  };
+
+  const handleFundPageChange = (newPage: number) => {
+    if (newPage >= 1 && newPage <= fundPagination.totalPages) {
+      setExpandedGoal(null);
+      setDrilldownData(null);
+      fetchFundData(newPage);
     }
   };
 
@@ -352,7 +424,7 @@ const GoalComparison = () => {
   return (
     <div className="container mx-auto p-6">
       {/* Header */}
-      <div className="mb-8">
+      <div className="mb-6">
         <div className="flex items-center gap-3 mb-2">
           <Target className="h-8 w-8 text-blue-600" />
           <h1 className="text-3xl font-bold text-gray-900">Goal Comparison</h1>
@@ -362,8 +434,32 @@ const GoalComparison = () => {
         </p>
       </div>
 
-      {/* Summary Cards */}
-      {aggregates && (
+      {/* Tabs */}
+      <div className="flex border-b border-gray-200 mb-6">
+        <button
+          onClick={() => setActiveTab('goal')}
+          className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'goal'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+          }`}
+        >
+          Goal Comparison
+        </button>
+        <button
+          onClick={() => setActiveTab('fund')}
+          className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors ${
+            activeTab === 'fund'
+              ? 'border-blue-600 text-blue-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+          }`}
+        >
+          Fund Comparison
+        </button>
+      </div>
+
+      {/* Goal Comparison Summary Cards */}
+      {activeTab === 'goal' && aggregates && (
         <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
           <div className="bg-white border border-blue-200 rounded-lg p-4">
             <p className="text-sm text-gray-600">Bank Deposits</p>
@@ -396,6 +492,48 @@ const GoalComparison = () => {
               <span className="text-green-600">{aggregates.matchedCount}</span>
               {" / "}
               <span className="text-orange-600">{aggregates.varianceCount}</span>
+            </p>
+            <p className="text-xs text-gray-500 mt-1">
+              Matched / Variance
+            </p>
+          </div>
+        </div>
+      )}
+
+      {/* Fund Comparison Summary Cards */}
+      {activeTab === 'fund' && fundAggregates && (
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4 mb-6">
+          <div className="bg-white border border-blue-200 rounded-lg p-4">
+            <p className="text-sm text-gray-600">Bank Total</p>
+            <p className="text-xl font-bold text-blue-600">
+              {formatCurrency(fundAggregates.totalBankAmount)}
+            </p>
+          </div>
+          <div className="bg-white border border-purple-200 rounded-lg p-4">
+            <p className="text-sm text-gray-600">Goal Total</p>
+            <p className="text-xl font-bold text-purple-600">
+              {formatCurrency(fundAggregates.totalGoalAmount)}
+            </p>
+          </div>
+          <div className="bg-white border border-orange-200 rounded-lg p-4">
+            <p className="text-sm text-gray-600">Total Variance</p>
+            <p className={`text-xl font-bold ${getVarianceClass(fundAggregates.totalVariance)}`}>
+              {fundAggregates.totalVariance > 0 ? "+" : ""}
+              {formatCurrency(fundAggregates.totalVariance)}
+            </p>
+          </div>
+          <div className="bg-white border border-green-200 rounded-lg p-4">
+            <p className="text-sm text-gray-600">Match Rate</p>
+            <p className="text-xl font-bold text-green-600">
+              {fundAggregates.matchRate.toFixed(1)}%
+            </p>
+          </div>
+          <div className="bg-white border border-gray-200 rounded-lg p-4">
+            <p className="text-sm text-gray-600">Goals</p>
+            <p className="text-xl font-bold text-gray-900">
+              <span className="text-green-600">{fundAggregates.matchedCount}</span>
+              {" / "}
+              <span className="text-orange-600">{fundAggregates.varianceCount}</span>
             </p>
             <p className="text-xs text-gray-500 mt-1">
               Matched / Variance
@@ -550,7 +688,7 @@ const GoalComparison = () => {
           </div>
           <button
             onClick={handleExport}
-            disabled={exporting || data.length === 0}
+            disabled={exporting || (activeTab === 'goal' ? data.length === 0 : fundData.length === 0)}
             className="inline-flex items-center px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:bg-gray-400 ml-auto"
           >
             {exporting ? (
@@ -581,7 +719,7 @@ const GoalComparison = () => {
       )}
 
       {/* Goal Comparison Table */}
-      {!loading && data.length > 0 && (
+      {!loading && activeTab === 'goal' && data.length > 0 && (
         <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
           <div className="overflow-x-auto">
             <table className="min-w-full divide-y divide-gray-200">
@@ -730,6 +868,13 @@ const GoalComparison = () => {
                                           <span className="text-xs text-gray-500">ID: {txn.transactionId}</span>
                                           <span className="font-bold text-blue-600">{formatCurrency(txn.totalAmount || 0)}</span>
                                         </div>
+                                        {/* Fund breakdown for bank transactions */}
+                                        <div className="mt-1 grid grid-cols-4 gap-1 text-xs text-gray-600">
+                                          <span>XUMMF: {formatCurrency(txn.xummfAmount || 0)}</span>
+                                          <span>XUBF: {formatCurrency(txn.xubfAmount || 0)}</span>
+                                          <span>XUDEF: {formatCurrency(txn.xudefAmount || 0)}</span>
+                                          <span>XUREF: {formatCurrency(txn.xurefAmount || 0)}</span>
+                                        </div>
                                         {txn.matchInfo && (
                                           <div className="mt-1">
                                             <span className={`text-xs px-1.5 py-0.5 rounded ${getMatchTypeBadge(txn.matchInfo.matchType)}`}>
@@ -769,6 +914,13 @@ const GoalComparison = () => {
                                             ID: {txn.transactionId || "N/A"}
                                           </span>
                                           <span className="font-bold text-purple-600">{formatCurrency(txn.totalAmount)}</span>
+                                        </div>
+                                        {/* Fund breakdown for goal transactions */}
+                                        <div className="mt-1 grid grid-cols-4 gap-1 text-xs text-gray-600">
+                                          <span>XUMMF: {formatCurrency(txn.xummfAmount || 0)}</span>
+                                          <span>XUBF: {formatCurrency(txn.xubfAmount || 0)}</span>
+                                          <span>XUDEF: {formatCurrency(txn.xudefAmount || 0)}</span>
+                                          <span>XUREF: {formatCurrency(txn.xurefAmount || 0)}</span>
                                         </div>
                                         {txn.matchInfo && (
                                           <div className="mt-1">
@@ -827,11 +979,274 @@ const GoalComparison = () => {
         </div>
       )}
 
-      {/* Empty State */}
-      {!loading && data.length === 0 && (
+      {/* Fund Comparison Table */}
+      {!loading && activeTab === 'fund' && fundData.length > 0 && (
+        <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="min-w-full divide-y divide-gray-200 text-xs">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-1 py-2 text-left font-medium text-gray-500 uppercase w-8"></th>
+                  <th className="px-1 py-2 text-center font-medium text-gray-500 uppercase w-16">Status</th>
+                  <th className="px-2 py-2 text-left font-medium text-gray-500 uppercase">Goal</th>
+                  <th className="px-2 py-2 text-left font-medium text-gray-500 uppercase">Client</th>
+                  <th className="px-1 py-2 text-right font-medium text-blue-600 uppercase">B.MMF</th>
+                  <th className="px-1 py-2 text-right font-medium text-purple-600 uppercase">G.MMF</th>
+                  <th className="px-1 py-2 text-right font-medium text-gray-500 uppercase">Var</th>
+                  <th className="px-1 py-2 text-right font-medium text-blue-600 uppercase">B.UBF</th>
+                  <th className="px-1 py-2 text-right font-medium text-purple-600 uppercase">G.UBF</th>
+                  <th className="px-1 py-2 text-right font-medium text-gray-500 uppercase">Var</th>
+                  <th className="px-1 py-2 text-right font-medium text-blue-600 uppercase">B.DEF</th>
+                  <th className="px-1 py-2 text-right font-medium text-purple-600 uppercase">G.DEF</th>
+                  <th className="px-1 py-2 text-right font-medium text-gray-500 uppercase">Var</th>
+                  <th className="px-1 py-2 text-right font-medium text-blue-600 uppercase">B.REF</th>
+                  <th className="px-1 py-2 text-right font-medium text-purple-600 uppercase">G.REF</th>
+                  <th className="px-1 py-2 text-right font-medium text-gray-500 uppercase">Var</th>
+                </tr>
+              </thead>
+              <tbody className="bg-white divide-y divide-gray-200">
+                {fundData.map((row) => (
+                  <React.Fragment key={row.goalNumber}>
+                    <tr
+                      className={`${getRowBgClass(row.status)} cursor-pointer transition-colors`}
+                      onClick={() => handleGoalClick(row.goalNumber)}
+                    >
+                      <td className="px-1 py-2 text-center">
+                        {expandedGoal === row.goalNumber ? (
+                          <ChevronUp className="h-3 w-3 text-gray-500" />
+                        ) : (
+                          <ChevronDown className="h-3 w-3 text-gray-500" />
+                        )}
+                      </td>
+                      <td className="px-1 py-2">
+                        <div className="flex items-center justify-center">
+                          {getStatusIcon(row.status)}
+                        </div>
+                      </td>
+                      <td className="px-2 py-2 font-mono text-xs">
+                        {row.goalNumber}
+                      </td>
+                      <td className="px-2 py-2 font-medium max-w-[120px] truncate" title={row.clientName}>
+                        {row.clientName}
+                        <div className="text-gray-500 truncate">{row.accountNumber}</div>
+                      </td>
+                      {/* XUMMF */}
+                      <td className="px-1 py-2 text-right text-blue-600">{formatCurrency(row.bankXUMMF)}</td>
+                      <td className="px-1 py-2 text-right text-purple-600">{formatCurrency(row.goalXUMMF)}</td>
+                      <td className={`px-1 py-2 text-right font-bold ${getVarianceClass(row.xummfVariance)}`}>
+                        {row.xummfVariance !== 0 ? formatCurrency(row.xummfVariance) : "-"}
+                      </td>
+                      {/* XUBF */}
+                      <td className="px-1 py-2 text-right text-blue-600">{formatCurrency(row.bankXUBF)}</td>
+                      <td className="px-1 py-2 text-right text-purple-600">{formatCurrency(row.goalXUBF)}</td>
+                      <td className={`px-1 py-2 text-right font-bold ${getVarianceClass(row.xubfVariance)}`}>
+                        {row.xubfVariance !== 0 ? formatCurrency(row.xubfVariance) : "-"}
+                      </td>
+                      {/* XUDEF */}
+                      <td className="px-1 py-2 text-right text-blue-600">{formatCurrency(row.bankXUDEF)}</td>
+                      <td className="px-1 py-2 text-right text-purple-600">{formatCurrency(row.goalXUDEF)}</td>
+                      <td className={`px-1 py-2 text-right font-bold ${getVarianceClass(row.xudefVariance)}`}>
+                        {row.xudefVariance !== 0 ? formatCurrency(row.xudefVariance) : "-"}
+                      </td>
+                      {/* XUREF */}
+                      <td className="px-1 py-2 text-right text-blue-600">{formatCurrency(row.bankXUREF)}</td>
+                      <td className="px-1 py-2 text-right text-purple-600">{formatCurrency(row.goalXUREF)}</td>
+                      <td className={`px-1 py-2 text-right font-bold ${getVarianceClass(row.xurefVariance)}`}>
+                        {row.xurefVariance !== 0 ? formatCurrency(row.xurefVariance) : "-"}
+                      </td>
+                    </tr>
+                    {/* Expanded Row - Transaction Drilldown */}
+                    {expandedGoal === row.goalNumber && (
+                      <tr className="bg-gray-50">
+                        <td colSpan={16} className="px-4 py-4">
+                          {drilldownLoading ? (
+                            <div className="flex justify-center py-8">
+                              <Loader2 className="h-6 w-6 text-blue-600 animate-spin" />
+                            </div>
+                          ) : drilldownData ? (
+                            <div>
+                              {/* Summary Stats */}
+                              <div className="grid grid-cols-6 gap-4 mb-4">
+                                <div className="bg-white border rounded p-3">
+                                  <p className="text-xs text-gray-500">Bank Transactions</p>
+                                  <p className="text-lg font-bold text-blue-600">{drilldownData.summary.bankCount}</p>
+                                </div>
+                                <div className="bg-white border rounded p-3">
+                                  <p className="text-xs text-gray-500">Goal Transactions</p>
+                                  <p className="text-lg font-bold text-purple-600">{drilldownData.summary.goalTxnCount}</p>
+                                </div>
+                                <div className="bg-white border rounded p-3">
+                                  <p className="text-xs text-gray-500">Exact Matches</p>
+                                  <p className="text-lg font-bold text-green-600">{drilldownData.summary.exactMatches}</p>
+                                </div>
+                                <div className="bg-white border rounded p-3">
+                                  <p className="text-xs text-gray-500">Amount Matches</p>
+                                  <p className="text-lg font-bold text-blue-600">{drilldownData.summary.amountMatches}</p>
+                                </div>
+                                <div className="bg-white border rounded p-3">
+                                  <p className="text-xs text-gray-500">Split Matches</p>
+                                  <p className="text-lg font-bold text-purple-600">{drilldownData.summary.splitMatches}</p>
+                                </div>
+                                <div className="bg-white border rounded p-3">
+                                  <p className="text-xs text-gray-500">Unmatched</p>
+                                  <p className="text-lg font-bold text-orange-600">
+                                    {drilldownData.summary.unmatchedBankCount + drilldownData.summary.unmatchedGoalTxnCount}
+                                  </p>
+                                </div>
+                              </div>
+
+                              {/* Two-column layout for bank and fund transactions */}
+                              <div className="grid grid-cols-2 gap-4">
+                                {/* Bank Transactions */}
+                                <div>
+                                  <h4 className="font-medium text-gray-700 mb-2">Bank Transactions</h4>
+                                  <div className="space-y-2 max-h-80 overflow-y-auto">
+                                    {drilldownData.bankTransactions.map((txn) => (
+                                      <div
+                                        key={txn.id}
+                                        className={`border rounded p-2 text-sm ${
+                                          txn.isMatched ? "bg-green-50 border-green-200" : "bg-orange-50 border-orange-200"
+                                        }`}
+                                      >
+                                        <div className="flex justify-between items-center">
+                                          <span className="font-mono text-xs">{formatDate(txn.transactionDate)}</span>
+                                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                            txn.transactionType === "DEPOSIT" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                                          }`}>
+                                            {txn.transactionType}
+                                          </span>
+                                        </div>
+                                        <div className="flex justify-between items-center mt-1">
+                                          <span className="text-xs text-gray-500">ID: {txn.transactionId}</span>
+                                          <span className="font-bold text-blue-600">{formatCurrency(txn.totalAmount || 0)}</span>
+                                        </div>
+                                        {/* Fund breakdown for bank transactions */}
+                                        <div className="mt-1 grid grid-cols-4 gap-1 text-xs text-gray-600">
+                                          <span>XUMMF: {formatCurrency(txn.xummfAmount || 0)}</span>
+                                          <span>XUBF: {formatCurrency(txn.xubfAmount || 0)}</span>
+                                          <span>XUDEF: {formatCurrency(txn.xudefAmount || 0)}</span>
+                                          <span>XUREF: {formatCurrency(txn.xurefAmount || 0)}</span>
+                                        </div>
+                                        {txn.matchInfo && (
+                                          <div className="mt-1">
+                                            <span className={`text-xs px-1.5 py-0.5 rounded ${getMatchTypeBadge(txn.matchInfo.matchType)}`}>
+                                              {txn.matchInfo.matchType.replace(/_/g, " ")}
+                                            </span>
+                                            <span className="text-xs text-gray-500 ml-2">
+                                              {Math.round(txn.matchInfo.confidence * 100)}% confidence
+                                            </span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+
+                                {/* Goal Transactions */}
+                                <div>
+                                  <h4 className="font-medium text-gray-700 mb-2">Goal Transactions</h4>
+                                  <div className="space-y-2 max-h-80 overflow-y-auto">
+                                    {drilldownData.goalTransactions.map((txn) => (
+                                      <div
+                                        key={txn.goalTransactionCode}
+                                        className={`border rounded p-2 text-sm ${
+                                          txn.isMatched ? "bg-green-50 border-green-200" : "bg-orange-50 border-orange-200"
+                                        }`}
+                                      >
+                                        <div className="flex justify-between items-center">
+                                          <span className="font-mono text-xs">{formatDate(txn.transactionDate)}</span>
+                                          <span className={`text-xs px-1.5 py-0.5 rounded ${
+                                            txn.transactionType === "DEPOSIT" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
+                                          }`}>
+                                            {txn.transactionType}
+                                          </span>
+                                        </div>
+                                        <div className="flex justify-between items-center mt-1">
+                                          <span className="text-xs text-gray-500">
+                                            ID: {txn.transactionId || "N/A"}
+                                          </span>
+                                          <span className="font-bold text-purple-600">{formatCurrency(txn.totalAmount)}</span>
+                                        </div>
+                                        {/* Fund breakdown for goal transactions */}
+                                        <div className="mt-1 grid grid-cols-4 gap-1 text-xs text-gray-600">
+                                          <span>XUMMF: {formatCurrency(txn.xummfAmount || 0)}</span>
+                                          <span>XUBF: {formatCurrency(txn.xubfAmount || 0)}</span>
+                                          <span>XUDEF: {formatCurrency(txn.xudefAmount || 0)}</span>
+                                          <span>XUREF: {formatCurrency(txn.xurefAmount || 0)}</span>
+                                        </div>
+                                        {txn.matchInfo && (
+                                          <div className="mt-1">
+                                            <span className={`text-xs px-1.5 py-0.5 rounded ${getMatchTypeBadge(txn.matchInfo.matchType)}`}>
+                                              {txn.matchInfo.matchType.replace(/_/g, " ")}
+                                            </span>
+                                          </div>
+                                        )}
+                                      </div>
+                                    ))}
+                                  </div>
+                                </div>
+                              </div>
+                            </div>
+                          ) : (
+                            <p className="text-gray-500 text-center py-4">No transaction data available</p>
+                          )}
+                        </td>
+                      </tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {/* Fund Comparison Pagination */}
+          <div className="px-4 py-3 border-t border-gray-200 flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="text-sm text-gray-700">
+              Showing {((fundPagination.page - 1) * fundPagination.limit) + 1} to{" "}
+              {Math.min(fundPagination.page * fundPagination.limit, fundPagination.total)} of{" "}
+              {fundPagination.total.toLocaleString()} goals
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={() => handleFundPageChange(fundPagination.page - 1)}
+                disabled={fundPagination.page <= 1 || loading}
+                className="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+              >
+                <ChevronLeft className="h-4 w-4 mr-1" />
+                Previous
+              </button>
+              <span className="text-sm text-gray-700 px-3">
+                Page {fundPagination.page} of {fundPagination.totalPages}
+              </span>
+              <button
+                onClick={() => handleFundPageChange(fundPagination.page + 1)}
+                disabled={fundPagination.page >= fundPagination.totalPages || loading}
+                className="inline-flex items-center px-3 py-1.5 border border-gray-300 rounded-lg text-sm font-medium text-gray-700 bg-white hover:bg-gray-50 disabled:bg-gray-100 disabled:text-gray-400 disabled:cursor-not-allowed"
+              >
+                Next
+                <ChevronRight className="h-4 w-4 ml-1" />
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Empty State - Goal Tab */}
+      {!loading && activeTab === 'goal' && data.length === 0 && (
         <div className="text-center py-12 bg-gray-50 rounded-lg">
           <Target className="h-16 w-16 text-gray-400 mx-auto mb-4" />
           <p className="text-gray-600 text-lg">No goal comparison data found</p>
+          <p className="text-gray-500 text-sm mt-2">
+            Try adjusting your date range or upload transactions first
+          </p>
+        </div>
+      )}
+
+      {/* Empty State - Fund Tab */}
+      {!loading && activeTab === 'fund' && fundData.length === 0 && (
+        <div className="text-center py-12 bg-gray-50 rounded-lg">
+          <Target className="h-16 w-16 text-gray-400 mx-auto mb-4" />
+          <p className="text-gray-600 text-lg">No fund comparison data found</p>
           <p className="text-gray-500 text-sm mt-2">
             Try adjusting your date range or upload transactions first
           </p>

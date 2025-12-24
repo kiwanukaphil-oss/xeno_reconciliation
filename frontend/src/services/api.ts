@@ -596,3 +596,121 @@ export const applyGoalMatches = async (
   });
   return handleResponse(response);
 };
+
+// =============================================================================
+// Fund Comparison APIs (Per-Fund NET Amounts)
+// =============================================================================
+
+export interface FundComparisonRow {
+  goalNumber: string;
+  clientName: string;
+  accountNumber: string;
+  bankXUMMF: number;
+  bankXUBF: number;
+  bankXUDEF: number;
+  bankXUREF: number;
+  bankTotal: number;
+  goalXUMMF: number;
+  goalXUBF: number;
+  goalXUDEF: number;
+  goalXUREF: number;
+  goalTotal: number;
+  xummfVariance: number;
+  xubfVariance: number;
+  xudefVariance: number;
+  xurefVariance: number;
+  totalVariance: number;
+  status: 'MATCHED' | 'VARIANCE';
+}
+
+export interface FundComparisonAggregates {
+  totalBankXUMMF: number;
+  totalGoalXUMMF: number;
+  xummfVariance: number;
+  totalBankXUBF: number;
+  totalGoalXUBF: number;
+  xubfVariance: number;
+  totalBankXUDEF: number;
+  totalGoalXUDEF: number;
+  xudefVariance: number;
+  totalBankXUREF: number;
+  totalGoalXUREF: number;
+  xurefVariance: number;
+  totalBankAmount: number;
+  totalGoalAmount: number;
+  totalVariance: number;
+  matchedCount: number;
+  varianceCount: number;
+  matchRate: number;
+}
+
+export interface FundComparisonResponse {
+  success: boolean;
+  data: FundComparisonRow[];
+  aggregates: FundComparisonAggregates;
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+  dateRange: {
+    startDate: string;
+    endDate: string;
+  };
+}
+
+export const fetchFundComparison = async (params: {
+  startDate?: string;
+  endDate?: string;
+  goalNumber?: string;
+  accountNumber?: string;
+  clientSearch?: string;
+  status?: string;
+  page?: number;
+  limit?: number;
+}): Promise<FundComparisonResponse> => {
+  const queryParams = new URLSearchParams();
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
+  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
+  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.status) queryParams.append("status", params.status);
+  if (params.page) queryParams.append("page", params.page.toString());
+  if (params.limit) queryParams.append("limit", params.limit.toString());
+
+  const response = await fetch(`${API_URL}/api/goal-comparison/fund-summary?${queryParams}`);
+  return handleResponse(response);
+};
+
+export const exportFundComparisonCSV = async (params: {
+  startDate?: string;
+  endDate?: string;
+  goalNumber?: string;
+  accountNumber?: string;
+  clientSearch?: string;
+  status?: string;
+}) => {
+  const queryParams = new URLSearchParams();
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
+  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
+  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.status) queryParams.append("status", params.status);
+
+  const response = await fetch(`${API_URL}/api/goal-comparison/fund-summary/export/csv?${queryParams}`);
+  if (!response.ok) {
+    throw new Error("Failed to export fund comparison data");
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `fund_comparison_${new Date().toISOString().split("T")[0]}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+};

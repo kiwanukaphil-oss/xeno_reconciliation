@@ -47,6 +47,32 @@ interface GoalTransaction {
   fundTransactionIds: string[];
 }
 
+interface FundSummary {
+  goalNumber: string;
+  clientName: string;
+  accountNumber: string;
+  // Bank fund totals (NET)
+  bankXUMMF: number;
+  bankXUBF: number;
+  bankXUDEF: number;
+  bankXUREF: number;
+  bankTotal: number;
+  // Goal transaction fund totals (NET)
+  goalXUMMF: number;
+  goalXUBF: number;
+  goalXUDEF: number;
+  goalXUREF: number;
+  goalTotal: number;
+  // Variances
+  xummfVariance: number;
+  xubfVariance: number;
+  xudefVariance: number;
+  xurefVariance: number;
+  totalVariance: number;
+  // Status
+  status: 'MATCHED' | 'VARIANCE';
+}
+
 /**
  * Smart Matching Algorithm for Bank/Fund Reconciliation
  *
@@ -97,6 +123,7 @@ export class SmartMatcher {
 
     // Query to aggregate bank and goal transactions by goal and type
     // Goal transactions are aggregated from fund_transactions grouped by goalTransactionCode
+    // Use ::date cast to ensure proper date comparison without timezone issues
     const query = `
       WITH bank_summary AS (
         SELECT
@@ -105,7 +132,7 @@ export class SmartMatcher {
           SUM(b."totalAmount") as total_amount,
           COUNT(*) as txn_count
         FROM bank_goal_transactions b
-        WHERE b."transactionDate" BETWEEN $1 AND $2
+        WHERE b."transactionDate"::date >= $1::date AND b."transactionDate"::date <= $2::date
         GROUP BY b."goalNumber", b."transactionType"
       ),
       goal_txn_summary AS (
@@ -116,7 +143,8 @@ export class SmartMatcher {
           COUNT(DISTINCT f."goalTransactionCode") as txn_count
         FROM fund_transactions f
         JOIN goals g ON f."goalId" = g."id"
-        WHERE f."transactionDate" BETWEEN $1 AND $2
+        WHERE f."transactionDate"::date >= $1::date AND f."transactionDate"::date <= $2::date
+          AND (f."source" IS NULL OR f."source" != 'Transfer_Reversal')
         GROUP BY g."goalNumber", f."transactionType"
       ),
       goal_info AS (
@@ -198,6 +226,163 @@ export class SmartMatcher {
   }
 
   /**
+   * Get fund-level summary for a date range
+   * Compares per-fund NET amounts (XUMMF, XUBF, XUDEF, XUREF) between bank and goal transactions
+   */
+  static async getFundSummary(
+    startDate: Date,
+    endDate: Date,
+    filters?: {
+      goalNumber?: string;
+      accountNumber?: string;
+      clientSearch?: string;
+      status?: 'ALL' | 'MATCHED' | 'VARIANCE';
+    }
+  ): Promise<{ data: FundSummary[]; total: number }> {
+    const conditions: string[] = [];
+    const params: any[] = [startDate, endDate];
+    let paramIndex = 3;
+
+    // Build optional filters
+    if (filters?.goalNumber) {
+      conditions.push(`g."goalNumber" ILIKE $${paramIndex}`);
+      params.push(`%${filters.goalNumber}%`);
+      paramIndex++;
+    }
+
+    if (filters?.accountNumber) {
+      conditions.push(`a."accountNumber" ILIKE $${paramIndex}`);
+      params.push(`%${filters.accountNumber}%`);
+      paramIndex++;
+    }
+
+    if (filters?.clientSearch) {
+      conditions.push(`c."clientName" ILIKE $${paramIndex}`);
+      params.push(`%${filters.clientSearch}%`);
+      paramIndex++;
+    }
+
+    const filterClause = conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '';
+
+    // Query to aggregate bank and goal transactions by fund (NET amounts)
+    // Use ::date cast to ensure proper date comparison without timezone issues
+    const query = `
+      WITH bank_fund_summary AS (
+        SELECT
+          b."goalNumber",
+          SUM(b."xummfAmount") as xummf,
+          SUM(b."xubfAmount") as xubf,
+          SUM(b."xudefAmount") as xudef,
+          SUM(b."xurefAmount") as xuref,
+          SUM(b."totalAmount") as total
+        FROM bank_goal_transactions b
+        WHERE b."transactionDate"::date >= $1::date AND b."transactionDate"::date <= $2::date
+        GROUP BY b."goalNumber"
+      ),
+      goal_fund_summary AS (
+        SELECT
+          g."goalNumber",
+          SUM(f."amount") FILTER (WHERE fund."fundCode" = 'XUMMF') as xummf,
+          SUM(f."amount") FILTER (WHERE fund."fundCode" = 'XUBF') as xubf,
+          SUM(f."amount") FILTER (WHERE fund."fundCode" = 'XUDEF') as xudef,
+          SUM(f."amount") FILTER (WHERE fund."fundCode" = 'XUREF') as xuref,
+          SUM(f."amount") as total
+        FROM fund_transactions f
+        JOIN goals g ON f."goalId" = g."id"
+        JOIN funds fund ON f."fundId" = fund."id"
+        WHERE f."transactionDate"::date >= $1::date AND f."transactionDate"::date <= $2::date
+          AND (f."source" IS NULL OR f."source" != 'Transfer_Reversal')
+        GROUP BY g."goalNumber"
+      ),
+      goal_info AS (
+        SELECT DISTINCT
+          g."goalNumber",
+          c."clientName",
+          a."accountNumber"
+        FROM goals g
+        JOIN accounts a ON g."accountId" = a."id"
+        JOIN clients c ON a."clientId" = c."id"
+        WHERE 1=1 ${filterClause}
+      )
+      SELECT
+        gi."goalNumber",
+        gi."clientName",
+        gi."accountNumber",
+        COALESCE(bfs.xummf, 0)::float as "bankXUMMF",
+        COALESCE(bfs.xubf, 0)::float as "bankXUBF",
+        COALESCE(bfs.xudef, 0)::float as "bankXUDEF",
+        COALESCE(bfs.xuref, 0)::float as "bankXUREF",
+        COALESCE(bfs.total, 0)::float as "bankTotal",
+        COALESCE(gfs.xummf, 0)::float as "goalXUMMF",
+        COALESCE(gfs.xubf, 0)::float as "goalXUBF",
+        COALESCE(gfs.xudef, 0)::float as "goalXUDEF",
+        COALESCE(gfs.xuref, 0)::float as "goalXUREF",
+        COALESCE(gfs.total, 0)::float as "goalTotal"
+      FROM goal_info gi
+      LEFT JOIN bank_fund_summary bfs ON bfs."goalNumber" = gi."goalNumber"
+      LEFT JOIN goal_fund_summary gfs ON gfs."goalNumber" = gi."goalNumber"
+      WHERE (bfs.total IS NOT NULL OR gfs.total IS NOT NULL)
+      ORDER BY gi."goalNumber"
+    `;
+
+    const rawResults = await prisma.$queryRawUnsafe(query, ...params) as any[];
+
+    // Process results and add calculated fields
+    const results: FundSummary[] = rawResults.map(row => {
+      const xummfVariance = row.bankXUMMF - row.goalXUMMF;
+      const xubfVariance = row.bankXUBF - row.goalXUBF;
+      const xudefVariance = row.bankXUDEF - row.goalXUDEF;
+      const xurefVariance = row.bankXUREF - row.goalXUREF;
+      const totalVariance = row.bankTotal - row.goalTotal;
+
+      // Check if any fund has a variance beyond tolerance
+      const checkVariance = (goalAmount: number, variance: number): boolean => {
+        const tolerance = Math.max(Math.abs(goalAmount) * AMOUNT_TOLERANCE_PERCENT, AMOUNT_TOLERANCE_MIN);
+        return Math.abs(variance) > tolerance;
+      };
+
+      const hasXUMMFVariance = checkVariance(row.goalXUMMF, xummfVariance);
+      const hasXUBFVariance = checkVariance(row.goalXUBF, xubfVariance);
+      const hasXUDEFVariance = checkVariance(row.goalXUDEF, xudefVariance);
+      const hasXUREFVariance = checkVariance(row.goalXUREF, xurefVariance);
+      const hasAnyVariance = hasXUMMFVariance || hasXUBFVariance || hasXUDEFVariance || hasXUREFVariance;
+
+      return {
+        goalNumber: row.goalNumber,
+        clientName: row.clientName,
+        accountNumber: row.accountNumber,
+        bankXUMMF: row.bankXUMMF,
+        bankXUBF: row.bankXUBF,
+        bankXUDEF: row.bankXUDEF,
+        bankXUREF: row.bankXUREF,
+        bankTotal: row.bankTotal,
+        goalXUMMF: row.goalXUMMF,
+        goalXUBF: row.goalXUBF,
+        goalXUDEF: row.goalXUDEF,
+        goalXUREF: row.goalXUREF,
+        goalTotal: row.goalTotal,
+        xummfVariance,
+        xubfVariance,
+        xudefVariance,
+        xurefVariance,
+        totalVariance,
+        status: hasAnyVariance ? 'VARIANCE' : 'MATCHED',
+      };
+    });
+
+    // Apply status filter if specified
+    let filteredResults = results;
+    if (filters?.status && filters.status !== 'ALL') {
+      filteredResults = results.filter(r => r.status === filters.status);
+    }
+
+    return {
+      data: filteredResults,
+      total: filteredResults.length,
+    };
+  }
+
+  /**
    * Get transactions for a specific goal with smart matching applied
    * Returns goal transactions (aggregated from fund transactions) instead of individual fund transactions
    */
@@ -244,6 +429,9 @@ export class SmartMatcher {
         goalId: goal.id,
         transactionDate: { gte: startDate, lte: endDate },
         ...(transactionType && { transactionType }),
+        // Exclude Transfer_Reversal transactions from comparison
+        // Prisma's 'not' filter includes null values by default
+        source: { not: 'Transfer_Reversal' },
       },
       include: {
         fund: { select: { fundCode: true } },
