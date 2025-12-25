@@ -24,16 +24,17 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     const limit = parseInt(req.query.limit as string) || 50;
 
     // Default to last 30 days if no dates provided
-    const end = endDate ? new Date(endDate) : new Date();
-    const start = startDate ? new Date(startDate) : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+    // Use date strings directly to avoid timezone issues with PostgreSQL
+    const endDateStr = endDate || new Date().toISOString().split('T')[0];
+    const startDateStr = startDate || new Date(new Date(endDateStr).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     logger.info('Fetching goal comparison summary', {
-      startDate: start.toISOString(),
-      endDate: end.toISOString(),
+      startDate: startDateStr,
+      endDate: endDateStr,
       filters: { goalNumber, accountNumber, clientSearch, status },
     });
 
-    const result = await SmartMatcher.getGoalSummary(start, end, {
+    const result = await SmartMatcher.getGoalSummary(startDateStr, endDateStr, {
       goalNumber,
       accountNumber,
       clientSearch,
@@ -82,8 +83,8 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
         totalPages: Math.ceil(result.total / limit),
       },
       dateRange: {
-        startDate: start.toISOString().split('T')[0],
-        endDate: end.toISOString().split('T')[0],
+        startDate: startDateStr,
+        endDate: endDateStr,
       },
     });
   } catch (error) {
@@ -212,16 +213,17 @@ router.get('/fund-summary', async (req: Request, res: Response, next: NextFuncti
     const limit = parseInt(req.query.limit as string) || 50;
 
     // Default to last 30 days if no dates provided
-    const end = endDate ? new Date(endDate) : new Date();
-    const start = startDate ? new Date(startDate) : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+    // Use date strings directly to avoid timezone issues with PostgreSQL
+    const endDateStr = endDate || new Date().toISOString().split('T')[0];
+    const startDateStr = startDate || new Date(new Date(endDateStr).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     logger.info('Fetching fund comparison summary', {
-      startDate: start.toISOString(),
-      endDate: end.toISOString(),
+      startDate: startDateStr,
+      endDate: endDateStr,
       filters: { goalNumber, accountNumber, clientSearch, status },
     });
 
-    const result = await SmartMatcher.getFundSummary(start, end, {
+    const result = await SmartMatcher.getFundSummary(startDateStr, endDateStr, {
       goalNumber,
       accountNumber,
       clientSearch,
@@ -291,8 +293,8 @@ router.get('/fund-summary', async (req: Request, res: Response, next: NextFuncti
         totalPages: Math.ceil(result.total / limit),
       },
       dateRange: {
-        startDate: start.toISOString().split('T')[0],
-        endDate: end.toISOString().split('T')[0],
+        startDate: startDateStr,
+        endDate: endDateStr,
       },
     });
   } catch (error) {
@@ -315,10 +317,11 @@ router.get('/fund-summary/export/csv', async (req: Request, res: Response, next:
     const status = req.query.status as 'ALL' | 'MATCHED' | 'VARIANCE';
 
     // Default to last 30 days if no dates provided
-    const end = endDate ? new Date(endDate) : new Date();
-    const start = startDate ? new Date(startDate) : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+    // Use date strings directly to avoid timezone issues with PostgreSQL
+    const endDateStr = endDate || new Date().toISOString().split('T')[0];
+    const startDateStr = startDate || new Date(new Date(endDateStr).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    const result = await SmartMatcher.getFundSummary(start, end, {
+    const result = await SmartMatcher.getFundSummary(startDateStr, endDateStr, {
       goalNumber,
       accountNumber,
       clientSearch,
@@ -375,7 +378,7 @@ router.get('/fund-summary/export/csv', async (req: Request, res: Response, next:
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="fund_comparison_${start.toISOString().split('T')[0]}_to_${end.toISOString().split('T')[0]}.csv"`
+      `attachment; filename="fund_comparison_${startDateStr}_to_${endDateStr}.csv"`
     );
     res.send(csvContent);
   } catch (error) {
@@ -398,10 +401,11 @@ router.get('/export/csv', async (req: Request, res: Response, next: NextFunction
     const status = req.query.status as 'ALL' | 'MATCHED' | 'VARIANCE';
 
     // Default to last 30 days if no dates provided
-    const end = endDate ? new Date(endDate) : new Date();
-    const start = startDate ? new Date(startDate) : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+    // Use date strings directly to avoid timezone issues with PostgreSQL
+    const endDateStr = endDate || new Date().toISOString().split('T')[0];
+    const startDateStr = startDate || new Date(new Date(endDateStr).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
-    const result = await SmartMatcher.getGoalSummary(start, end, {
+    const result = await SmartMatcher.getGoalSummary(startDateStr, endDateStr, {
       goalNumber,
       accountNumber,
       clientSearch,
@@ -448,7 +452,7 @@ router.get('/export/csv', async (req: Request, res: Response, next: NextFunction
     res.setHeader('Content-Type', 'text/csv');
     res.setHeader(
       'Content-Disposition',
-      `attachment; filename="goal_comparison_${start.toISOString().split('T')[0]}_to_${end.toISOString().split('T')[0]}.csv"`
+      `attachment; filename="goal_comparison_${startDateStr}_to_${endDateStr}.csv"`
     );
     res.send(csvContent);
   } catch (error) {
@@ -517,19 +521,23 @@ router.post('/run-matching', async (req: Request, res: Response, next: NextFunct
     const { startDate, endDate, applyUpdates, batchSize = 100, offset = 0 } = req.body;
 
     // Default to last 30 days if no dates provided
-    const end = endDate ? new Date(endDate) : new Date();
-    const start = startDate ? new Date(startDate) : new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
+    // Use date strings directly to avoid timezone issues with PostgreSQL
+    const endDateStr = endDate || new Date().toISOString().split('T')[0];
+    const startDateStr = startDate || new Date(new Date(endDateStr).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+    // Also create Date objects for Prisma queries that need them
+    const startDateObj = new Date(startDateStr + 'T00:00:00');
+    const endDateObj = new Date(endDateStr + 'T23:59:59');
 
     logger.info('Running smart matching for goals (batched)', {
-      startDate: start.toISOString(),
-      endDate: end.toISOString(),
+      startDate: startDateStr,
+      endDate: endDateStr,
       applyUpdates: !!applyUpdates,
       batchSize,
       offset,
     });
 
     // Get all goals with transactions in period
-    const summary = await SmartMatcher.getGoalSummary(start, end);
+    const summary = await SmartMatcher.getGoalSummary(startDateStr, endDateStr);
     const totalGoals = summary.data.length;
 
     // Apply batch slicing
@@ -546,7 +554,7 @@ router.post('/run-matching', async (req: Request, res: Response, next: NextFunct
 
     // Process each goal in the batch
     for (const goal of batchGoals) {
-      const result = await SmartMatcher.getGoalTransactions(goal.goalNumber, start, end);
+      const result = await SmartMatcher.getGoalTransactions(goal.goalNumber, startDateObj, endDateObj);
 
       if (result.matches.length > 0) {
         totalMatches += result.matches.length;
@@ -593,8 +601,8 @@ router.post('/run-matching', async (req: Request, res: Response, next: NextFunct
         split: splitMatches,
       },
       dateRange: {
-        startDate: start.toISOString().split('T')[0],
-        endDate: end.toISOString().split('T')[0],
+        startDate: startDateStr,
+        endDate: endDateStr,
       },
       results: matchResults,
     });

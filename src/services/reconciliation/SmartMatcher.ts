@@ -85,10 +85,12 @@ export class SmartMatcher {
 
   /**
    * Get goal-level summary for a date range
+   * @param startDate - Start date as YYYY-MM-DD string to avoid timezone issues
+   * @param endDate - End date as YYYY-MM-DD string to avoid timezone issues
    */
   static async getGoalSummary(
-    startDate: Date,
-    endDate: Date,
+    startDate: string,
+    endDate: string,
     filters?: {
       goalNumber?: string;
       accountNumber?: string;
@@ -97,6 +99,7 @@ export class SmartMatcher {
     }
   ): Promise<{ data: GoalSummary[]; total: number }> {
     const conditions: string[] = [];
+    // Pass date strings directly to avoid timezone conversion issues
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
@@ -228,10 +231,12 @@ export class SmartMatcher {
   /**
    * Get fund-level summary for a date range
    * Compares per-fund NET amounts (XUMMF, XUBF, XUDEF, XUREF) between bank and goal transactions
+   * @param startDate - Start date as YYYY-MM-DD string to avoid timezone issues
+   * @param endDate - End date as YYYY-MM-DD string to avoid timezone issues
    */
   static async getFundSummary(
-    startDate: Date,
-    endDate: Date,
+    startDate: string,
+    endDate: string,
     filters?: {
       goalNumber?: string;
       accountNumber?: string;
@@ -240,6 +245,7 @@ export class SmartMatcher {
     }
   ): Promise<{ data: FundSummary[]; total: number }> {
     const conditions: string[] = [];
+    // Pass date strings directly to avoid timezone conversion issues
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
