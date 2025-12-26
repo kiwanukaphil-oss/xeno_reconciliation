@@ -692,4 +692,5 @@ enum VarianceReviewTag {
   AMOUNT_DISCREPANCY      // Amounts don't match
   DATA_ENTRY_ERROR        // Incorrect data entry
   UNDER_INVESTIGATION     // Needs further investigation
+  REVERSAL_NETTED         // Paired with a reversal transaction (net zero)
 }

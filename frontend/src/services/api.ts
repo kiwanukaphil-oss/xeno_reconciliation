@@ -728,6 +728,7 @@ export const VARIANCE_REVIEW_TAGS = [
   { value: 'AMOUNT_DISCREPANCY', label: 'Amount Discrepancy' },
   { value: 'DATA_ENTRY_ERROR', label: 'Data Entry Error' },
   { value: 'UNDER_INVESTIGATION', label: 'Under Investigation' },
+  { value: 'REVERSAL_NETTED', label: 'Reversal (Net Zero)' },
 ] as const;
 
 export type VarianceReviewTag = typeof VARIANCE_REVIEW_TAGS[number]['value'];
@@ -931,4 +932,90 @@ export const exportVarianceTransactionsExcel = async (params: {
   a.click();
   document.body.removeChild(a);
   window.URL.revokeObjectURL(url);
+};
+
+// ============================================================================
+// REVERSAL LINKING API
+// ============================================================================
+
+export interface ReversalCandidate {
+  id: string;
+  transactionId: string;
+  transactionDate: string;
+  transactionType: string;
+  totalAmount: number;
+  goalNumber: string;
+  clientName: string;
+  accountNumber: string;
+  reviewTag: string | null;
+  reviewNotes: string | null;
+}
+
+export interface ReversalCandidatesResponse {
+  success: boolean;
+  sourceTransaction: ReversalCandidate;
+  candidates: ReversalCandidate[];
+}
+
+// Find potential reversal candidates for a bank transaction
+export const findReversalCandidates = async (
+  transactionId: string,
+  dateRange?: { startDate: string; endDate: string }
+): Promise<ReversalCandidatesResponse> => {
+  const queryParams = new URLSearchParams();
+  if (dateRange?.startDate) queryParams.append("startDate", dateRange.startDate);
+  if (dateRange?.endDate) queryParams.append("endDate", dateRange.endDate);
+
+  const response = await fetch(
+    `${API_URL}/api/goal-comparison/reversal-candidates/${encodeURIComponent(transactionId)}?${queryParams}`
+  );
+  return handleResponse(response);
+};
+
+// Link two bank transactions as a reversal pair
+export const linkReversal = async (params: {
+  transactionId1: string;
+  transactionId2: string;
+  linkedBy: string;
+}): Promise<{
+  success: boolean;
+  message: string;
+  transaction1: { id: string; transactionType: string; totalAmount: number };
+  transaction2: { id: string; transactionType: string; totalAmount: number };
+}> => {
+  const response = await fetch(`${API_URL}/api/goal-comparison/link-reversal`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  return handleResponse(response);
+};
+
+// Unlink a reversal pair
+export const unlinkReversal = async (
+  transactionId: string
+): Promise<{
+  success: boolean;
+  message: string;
+  unlinkedCount: number;
+}> => {
+  const response = await fetch(
+    `${API_URL}/api/goal-comparison/unlink-reversal/${encodeURIComponent(transactionId)}`,
+    { method: 'DELETE' }
+  );
+  return handleResponse(response);
+};
+
+// Get reversal pair info for a transaction
+export const getReversalPairInfo = async (
+  transactionId: string
+): Promise<{
+  success: boolean;
+  isReversalPair: boolean;
+  pairedTransaction: ReversalCandidate | null;
+}> => {
+  const response = await fetch(
+    `${API_URL}/api/goal-comparison/reversal-info/${encodeURIComponent(transactionId)}`
+  );
+  return handleResponse(response);
 };

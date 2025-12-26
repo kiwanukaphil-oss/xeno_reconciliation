@@ -1606,6 +1606,326 @@ export class SmartMatcher {
 
     return unmatched;
   }
+
+  // ============================================================================
+  // REVERSAL LINKING METHODS
+  // ============================================================================
+
+  /**
+   * Find potential reversal candidates for a transaction
+   * Returns unmatched transactions with same goal, same absolute amount, opposite transaction type
+   */
+  static async findReversalCandidates(
+    transactionId: string,
+    dateRange?: { startDate: string; endDate: string }
+  ): Promise<{
+    sourceTransaction: any;
+    candidates: any[];
+  }> {
+    // Get the source transaction
+    const sourceTransaction = await prisma.bankGoalTransaction.findUnique({
+      where: { id: transactionId },
+      include: {
+        client: true,
+        account: true,
+        goal: true,
+      },
+    });
+
+    if (!sourceTransaction) {
+      throw new Error(`Transaction ${transactionId} not found`);
+    }
+
+    // Determine opposite transaction type
+    const oppositeType = sourceTransaction.transactionType === 'DEPOSIT' ? 'WITHDRAWAL' : 'DEPOSIT';
+
+    // Build date range filter
+    let dateFilter: any = {};
+    if (dateRange) {
+      dateFilter = {
+        transactionDate: {
+          gte: new Date(dateRange.startDate),
+          lte: new Date(dateRange.endDate),
+        },
+      };
+    }
+
+    // Find candidates: same goal, same absolute amount, opposite type, unmatched (in variance)
+    const candidates = await prisma.bankGoalTransaction.findMany({
+      where: {
+        id: { not: transactionId }, // Not the same transaction
+        goalNumber: sourceTransaction.goalNumber,
+        transactionType: oppositeType,
+        totalAmount: sourceTransaction.totalAmount, // Same absolute amount
+        // Only consider unmatched transactions (those in variance)
+        matchedGoalTransactionCode: null,
+        // Exclude already linked reversals
+        reviewTag: { not: 'REVERSAL_NETTED' as any },
+        // Exclude Transfer_Reversal and RT Change
+        AND: [
+          { NOT: { transactionId: { contains: 'Transfer_Reversal' } } },
+          { NOT: { transactionId: 'RT Change' } },
+        ],
+        ...dateFilter,
+      },
+      include: {
+        client: true,
+        account: true,
+      },
+      orderBy: { transactionDate: 'desc' },
+    });
+
+    logger.info('Found reversal candidates', {
+      sourceTransactionId: transactionId,
+      sourceAmount: Number(sourceTransaction.totalAmount),
+      sourceType: sourceTransaction.transactionType,
+      sourceGoal: sourceTransaction.goalNumber,
+      candidateCount: candidates.length,
+    });
+
+    return {
+      sourceTransaction: {
+        id: sourceTransaction.id,
+        transactionId: sourceTransaction.transactionId,
+        transactionDate: sourceTransaction.transactionDate,
+        transactionType: sourceTransaction.transactionType,
+        totalAmount: Number(sourceTransaction.totalAmount),
+        goalNumber: sourceTransaction.goalNumber,
+        clientName: sourceTransaction.client?.clientName,
+        accountNumber: sourceTransaction.account?.accountNumber,
+        reviewTag: sourceTransaction.reviewTag,
+        reviewNotes: sourceTransaction.reviewNotes,
+      },
+      candidates: candidates.map(c => ({
+        id: c.id,
+        transactionId: c.transactionId,
+        transactionDate: c.transactionDate,
+        transactionType: c.transactionType,
+        totalAmount: Number(c.totalAmount),
+        goalNumber: c.goalNumber,
+        clientName: c.client?.clientName,
+        accountNumber: c.account?.accountNumber,
+        reviewTag: c.reviewTag,
+        reviewNotes: c.reviewNotes,
+      })),
+    };
+  }
+
+  /**
+   * Link two bank transactions as a reversal pair
+   * Both transactions get REVERSAL_NETTED tag and store the paired transaction ID in reviewNotes
+   */
+  static async linkReversal(
+    transactionId1: string,
+    transactionId2: string,
+    linkedBy: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    transaction1: any;
+    transaction2: any;
+  }> {
+    // Verify both transactions exist
+    const txn1 = await prisma.bankGoalTransaction.findUnique({
+      where: { id: transactionId1 },
+    });
+    const txn2 = await prisma.bankGoalTransaction.findUnique({
+      where: { id: transactionId2 },
+    });
+
+    if (!txn1 || !txn2) {
+      throw new Error('One or both transactions not found');
+    }
+
+    // Validate they're in the same goal
+    if (txn1.goalNumber !== txn2.goalNumber) {
+      throw new Error(`Transactions must be in the same goal. Found ${txn1.goalNumber} and ${txn2.goalNumber}`);
+    }
+
+    // Validate they have opposite transaction types
+    if (txn1.transactionType === txn2.transactionType) {
+      throw new Error(`Transactions must have opposite types. Both are ${txn1.transactionType}`);
+    }
+
+    // Validate amounts match
+    if (Number(txn1.totalAmount) !== Number(txn2.totalAmount)) {
+      throw new Error(`Amounts must match. Found ${txn1.totalAmount} and ${txn2.totalAmount}`);
+    }
+
+    // Update both transactions
+    const now = new Date();
+    const [updated1, updated2] = await prisma.$transaction([
+      prisma.bankGoalTransaction.update({
+        where: { id: transactionId1 },
+        data: {
+          reviewTag: 'REVERSAL_NETTED' as any, // Type will be valid after Prisma regenerate
+          reviewNotes: `Reversal pair with: ${transactionId2}`,
+          reviewedBy: linkedBy,
+          reviewedAt: now,
+          updatedAt: now,
+        },
+      }),
+      prisma.bankGoalTransaction.update({
+        where: { id: transactionId2 },
+        data: {
+          reviewTag: 'REVERSAL_NETTED' as any, // Type will be valid after Prisma regenerate
+          reviewNotes: `Reversal pair with: ${transactionId1}`,
+          reviewedBy: linkedBy,
+          reviewedAt: now,
+          updatedAt: now,
+        },
+      }),
+    ]);
+
+    logger.info('Linked reversal pair', {
+      transactionId1,
+      transactionId2,
+      goalNumber: txn1.goalNumber,
+      amount: Number(txn1.totalAmount),
+      linkedBy,
+    });
+
+    return {
+      success: true,
+      message: `Linked ${txn1.transactionType} and ${txn2.transactionType} as reversal pair (net zero)`,
+      transaction1: {
+        id: updated1.id,
+        transactionId: updated1.transactionId,
+        transactionType: updated1.transactionType,
+        totalAmount: Number(updated1.totalAmount),
+        reviewTag: updated1.reviewTag,
+      },
+      transaction2: {
+        id: updated2.id,
+        transactionId: updated2.transactionId,
+        transactionType: updated2.transactionType,
+        totalAmount: Number(updated2.totalAmount),
+        reviewTag: updated2.reviewTag,
+      },
+    };
+  }
+
+  /**
+   * Unlink a reversal pair
+   * Removes REVERSAL_NETTED tag from both transactions in the pair
+   */
+  static async unlinkReversal(
+    transactionId: string
+  ): Promise<{
+    success: boolean;
+    message: string;
+    unlinkedCount: number;
+  }> {
+    // Find the transaction
+    const txn = await prisma.bankGoalTransaction.findUnique({
+      where: { id: transactionId },
+    });
+
+    if (!txn) {
+      throw new Error(`Transaction ${transactionId} not found`);
+    }
+
+    if ((txn.reviewTag as string) !== 'REVERSAL_NETTED') {
+      throw new Error(`Transaction ${transactionId} is not part of a reversal pair`);
+    }
+
+    // Extract paired transaction ID from reviewNotes
+    const pairedIdMatch = txn.reviewNotes?.match(/Reversal pair with: ([a-f0-9-]+)/);
+    const pairedId = pairedIdMatch ? pairedIdMatch[1] : null;
+
+    let unlinkedCount = 0;
+
+    // Unlink this transaction
+    await prisma.bankGoalTransaction.update({
+      where: { id: transactionId },
+      data: {
+        reviewTag: null,
+        reviewNotes: null,
+        reviewedBy: null,
+        reviewedAt: null,
+        updatedAt: new Date(),
+      },
+    });
+    unlinkedCount++;
+
+    // Unlink paired transaction if found
+    if (pairedId) {
+      const paired = await prisma.bankGoalTransaction.findUnique({
+        where: { id: pairedId },
+      });
+
+      if (paired && (paired.reviewTag as string) === 'REVERSAL_NETTED') {
+        await prisma.bankGoalTransaction.update({
+          where: { id: pairedId },
+          data: {
+            reviewTag: null,
+            reviewNotes: null,
+            reviewedBy: null,
+            reviewedAt: null,
+            updatedAt: new Date(),
+          },
+        });
+        unlinkedCount++;
+      }
+    }
+
+    logger.info('Unlinked reversal pair', {
+      transactionId,
+      pairedId,
+      unlinkedCount,
+    });
+
+    return {
+      success: true,
+      message: `Unlinked ${unlinkedCount} transaction(s) from reversal pair`,
+      unlinkedCount,
+    };
+  }
+
+  /**
+   * Get reversal pair info for a transaction
+   * Returns the paired transaction details if this transaction is part of a reversal pair
+   */
+  static async getReversalPairInfo(
+    transactionId: string
+  ): Promise<{
+    isReversalPair: boolean;
+    pairedTransaction: any | null;
+  }> {
+    const txn = await prisma.bankGoalTransaction.findUnique({
+      where: { id: transactionId },
+    });
+
+    if (!txn || (txn.reviewTag as string) !== 'REVERSAL_NETTED') {
+      return { isReversalPair: false, pairedTransaction: null };
+    }
+
+    // Extract paired transaction ID from reviewNotes
+    const pairedIdMatch = txn.reviewNotes?.match(/Reversal pair with: ([a-f0-9-]+)/);
+    const pairedId = pairedIdMatch ? pairedIdMatch[1] : null;
+
+    if (!pairedId) {
+      return { isReversalPair: true, pairedTransaction: null };
+    }
+
+    const paired = await prisma.bankGoalTransaction.findUnique({
+      where: { id: pairedId },
+      include: { client: true, account: true },
+    });
+
+    return {
+      isReversalPair: true,
+      pairedTransaction: paired ? {
+        id: paired.id,
+        transactionId: paired.transactionId,
+        transactionDate: paired.transactionDate,
+        transactionType: paired.transactionType,
+        totalAmount: Number(paired.totalAmount),
+        goalNumber: paired.goalNumber,
+        clientName: paired.client?.clientName,
+      } : null,
+    };
+  }
 }
 
 export default SmartMatcher;

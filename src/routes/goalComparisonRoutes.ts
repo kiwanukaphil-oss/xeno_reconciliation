@@ -1019,4 +1019,117 @@ router.get('/variance-transactions/export', async (req: Request, res: Response, 
   }
 });
 
+// ============================================================================
+// REVERSAL LINKING ENDPOINTS
+// ============================================================================
+
+/**
+ * Find potential reversal candidates for a bank transaction
+ * GET /api/goal-comparison/reversal-candidates/:transactionId
+ *
+ * Returns unmatched transactions with same goal, same absolute amount, opposite type
+ */
+router.get('/reversal-candidates/:transactionId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { transactionId } = req.params;
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+
+    if (!transactionId) {
+      throw new AppError(400, 'Transaction ID is required');
+    }
+
+    const dateRange = startDate && endDate
+      ? { startDate, endDate }
+      : undefined;
+
+    const result = await SmartMatcher.findReversalCandidates(transactionId, dateRange);
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    logger.error('Error finding reversal candidates:', error);
+    next(error);
+  }
+});
+
+/**
+ * Link two bank transactions as a reversal pair
+ * POST /api/goal-comparison/link-reversal
+ *
+ * Both transactions get REVERSAL_NETTED tag and are linked together
+ * Validates: same goal, same absolute amount, opposite types
+ */
+router.post('/link-reversal', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { transactionId1, transactionId2, linkedBy } = req.body;
+
+    if (!transactionId1 || !transactionId2) {
+      throw new AppError(400, 'Both transaction IDs are required');
+    }
+
+    if (!linkedBy) {
+      throw new AppError(400, 'Linked by is required');
+    }
+
+    const result = await SmartMatcher.linkReversal(transactionId1, transactionId2, linkedBy);
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error linking reversal:', error);
+    next(error);
+  }
+});
+
+/**
+ * Unlink a reversal pair
+ * DELETE /api/goal-comparison/unlink-reversal/:transactionId
+ *
+ * Removes REVERSAL_NETTED tag from both transactions in the pair
+ */
+router.delete('/unlink-reversal/:transactionId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { transactionId } = req.params;
+
+    if (!transactionId) {
+      throw new AppError(400, 'Transaction ID is required');
+    }
+
+    const result = await SmartMatcher.unlinkReversal(transactionId);
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error unlinking reversal:', error);
+    next(error);
+  }
+});
+
+/**
+ * Get reversal pair info for a transaction
+ * GET /api/goal-comparison/reversal-info/:transactionId
+ *
+ * Returns paired transaction details if this transaction is part of a reversal pair
+ */
+router.get('/reversal-info/:transactionId', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { transactionId } = req.params;
+
+    if (!transactionId) {
+      throw new AppError(400, 'Transaction ID is required');
+    }
+
+    const result = await SmartMatcher.getReversalPairInfo(transactionId);
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    logger.error('Error getting reversal info:', error);
+    next(error);
+  }
+});
+
 export default router;
