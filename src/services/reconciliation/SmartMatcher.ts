@@ -1,4 +1,4 @@
-import { PrismaClient, ReconciliationStatus } from '@prisma/client';
+import { PrismaClient, ReconciliationStatus, Prisma } from '@prisma/client';
 import { logger } from '../../config/logger';
 
 const prisma = new PrismaClient();
@@ -1645,6 +1645,8 @@ export class SmartMatcher {
     // If source is WITHDRAWAL of -2,275,000 → look for DEPOSIT of 2,275,000
     const sourceAmount = Number(sourceTransaction.totalAmount);
     const targetAmount = -sourceAmount; // Negate to find opposite
+    // Convert to Prisma Decimal for proper comparison (totalAmount is Decimal(18,2))
+    const targetAmountDecimal = new Prisma.Decimal(targetAmount);
 
     // Build date range filter
     let dateFilter: any = {};
@@ -1663,11 +1665,14 @@ export class SmartMatcher {
         id: { not: transactionId }, // Not the same transaction
         goalNumber: sourceTransaction.goalNumber,
         transactionType: oppositeType,
-        totalAmount: targetAmount, // Negated amount (e.g., if source is 2,275,000 DEPOSIT, find -2,275,000 WITHDRAWAL)
+        totalAmount: targetAmountDecimal, // Negated amount as Decimal (e.g., if source is 2,275,000 DEPOSIT, find -2,275,000 WITHDRAWAL)
         // Only consider unmatched transactions (those in variance)
         matchedGoalTransactionCode: null,
-        // Exclude already linked reversals
-        reviewTag: { not: 'REVERSAL_NETTED' as any },
+        // Exclude already linked reversals (but include null/untagged transactions)
+        OR: [
+          { reviewTag: null },
+          { reviewTag: { not: 'REVERSAL_NETTED' as any } },
+        ],
         // Exclude Transfer_Reversal and RT Change
         AND: [
           { NOT: { transactionId: { contains: 'Transfer_Reversal' } } },
