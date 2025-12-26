@@ -1010,6 +1010,8 @@ const GoalComparison = () => {
               <option value="MATCHED">Matched</option>
               <option value="VARIANCE">Variance</option>
               <option value="REVIEWED">Reviewed</option>
+              <option value="UNREVIEWED">Unreviewed</option>
+              <option value="PARTIAL">Partial</option>
             </select>
           </div>
         </div>

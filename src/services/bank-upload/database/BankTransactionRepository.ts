@@ -28,25 +28,25 @@ export class BankTransactionRepository {
 
       for (const txn of batch) {
         try {
-          // Find account
+          // Find account - should always exist (validated in BankTransactionValidator)
           const account = await prisma.account.findUnique({
             where: { accountNumber: txn.accountNumber },
             include: { client: true },
           });
 
           if (!account) {
-            logger.warn(`Row ${txn.rowNumber}: Account not found: ${txn.accountNumber}`);
-            continue;
+            // This should never happen if validation passed - throw error to prevent silent data loss
+            throw new Error(`CRITICAL: Account "${txn.accountNumber}" not found at row ${txn.rowNumber}. This should have been caught during validation.`);
           }
 
-          // Find goal
+          // Find goal - should always exist (validated in BankTransactionValidator)
           const goal = await prisma.goal.findUnique({
             where: { goalNumber: txn.goalNumber },
           });
 
           if (!goal) {
-            logger.warn(`Row ${txn.rowNumber}: Goal not found: ${txn.goalNumber}`);
-            continue;
+            // This should never happen if validation passed - throw error to prevent silent data loss
+            throw new Error(`CRITICAL: Goal "${txn.goalNumber}" not found at row ${txn.rowNumber}. This should have been caught during validation.`);
           }
 
           transactionData.push({

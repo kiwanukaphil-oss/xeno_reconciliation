@@ -106,7 +106,7 @@ export class SmartMatcher {
       goalNumber?: string;
       accountNumber?: string;
       clientSearch?: string;
-      status?: 'ALL' | 'MATCHED' | 'VARIANCE' | 'REVIEWED';
+      status?: 'ALL' | 'MATCHED' | 'VARIANCE' | 'REVIEWED' | 'UNREVIEWED' | 'PARTIAL';
     }
   ): Promise<{ data: GoalSummary[]; total: number }> {
     const conditions: string[] = [];
@@ -153,7 +153,7 @@ export class SmartMatcher {
           COUNT(*) as txn_count
         FROM bank_goal_transactions b
         WHERE b."transactionDate"::date >= $1::date AND b."transactionDate"::date <= $2::date
-          AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
+          AND (b."transactionId" IS NULL OR (b."transactionId" NOT LIKE '%Transfer_Reversal%' AND b."transactionId" != 'RT Change'))
         GROUP BY b."goalNumber", b."transactionType"
       ),
       goal_txn_summary AS (
@@ -168,16 +168,19 @@ export class SmartMatcher {
           AND (f."source" IS NULL OR f."source" != 'Transfer_Reversal')
         GROUP BY g."goalNumber", f."transactionType"
       ),
-      -- Count unmatched bank transactions
-      -- Unmatched = no goal transaction has the same transactionId (aligns with drilldown's exact match)
+      -- Count bank transactions not matched by transactionId (variance transactions)
+      -- These are split into: unreviewed (pending) vs reviewed (tagged OR Smart Matched)
       unmatched_bank_stats AS (
         SELECT
           b."goalNumber",
-          COUNT(*) FILTER (WHERE b."reviewTag" IS NULL) as unreviewed_count,
-          COUNT(*) FILTER (WHERE b."reviewTag" IS NOT NULL) as reviewed_count
+          -- Unreviewed/Pending = not tagged AND not matched by Smart Matcher
+          COUNT(*) FILTER (WHERE b."reviewTag" IS NULL AND b."matchedGoalTransactionCode" IS NULL) as unreviewed_count,
+          -- Reviewed = tagged OR matched by Smart Matcher
+          COUNT(*) FILTER (WHERE b."reviewTag" IS NOT NULL OR b."matchedGoalTransactionCode" IS NOT NULL) as reviewed_count
         FROM bank_goal_transactions b
         WHERE b."transactionDate"::date >= $1::date AND b."transactionDate"::date <= $2::date
-          AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
+          AND (b."transactionId" IS NULL OR (b."transactionId" NOT LIKE '%Transfer_Reversal%' AND b."transactionId" != 'RT Change'))
+          -- Only include transactions NOT matched by transactionId (these are the variance/unmatched ones)
           AND NOT EXISTS (
             SELECT 1 FROM fund_transactions f
             JOIN goals g ON f."goalId" = g."id"
@@ -189,24 +192,63 @@ export class SmartMatcher {
           )
         GROUP BY b."goalNumber"
       ),
-      -- Count unmatched goal transactions
-      -- Unmatched = no bank transaction has the same transactionId (aligns with drilldown's exact match)
+      -- Count goal transactions not matched by transactionId (variance transactions)
+      -- These are split into: unreviewed (pending) vs reviewed (tagged OR referenced by Smart Match)
       unmatched_goal_stats AS (
         SELECT
           g."goalNumber",
-          COUNT(DISTINCT f."goalTransactionCode") FILTER (WHERE f."reviewTag" IS NULL) as unreviewed_count,
-          COUNT(DISTINCT f."goalTransactionCode") FILTER (WHERE f."reviewTag" IS NOT NULL) as reviewed_count
+          -- Unreviewed/Pending = not tagged AND not referenced by any bank's matchedGoalTransactionCode
+          COUNT(DISTINCT f."goalTransactionCode") FILTER (
+            WHERE f."reviewTag" IS NULL
+              AND NOT EXISTS (
+                SELECT 1 FROM bank_goal_transactions b2
+                WHERE b2."goalNumber" = g."goalNumber"
+                  AND b2."matchedGoalTransactionCode" IS NOT NULL
+                  AND (
+                    b2."matchedGoalTransactionCode" = f."goalTransactionCode"
+                    OR f."goalTransactionCode" = ANY(string_to_array(
+                      CASE
+                        WHEN b2."matchedGoalTransactionCode" LIKE 'MANUAL:%' THEN split_part(b2."matchedGoalTransactionCode", ':', 3)
+                        WHEN b2."matchedGoalTransactionCode" LIKE '%:%' THEN split_part(b2."matchedGoalTransactionCode", ':', 2)
+                        ELSE b2."matchedGoalTransactionCode"
+                      END,
+                      ','
+                    ))
+                  )
+              )
+          ) as unreviewed_count,
+          -- Reviewed = tagged OR referenced by a bank's matchedGoalTransactionCode
+          COUNT(DISTINCT f."goalTransactionCode") FILTER (
+            WHERE f."reviewTag" IS NOT NULL
+              OR EXISTS (
+                SELECT 1 FROM bank_goal_transactions b2
+                WHERE b2."goalNumber" = g."goalNumber"
+                  AND b2."matchedGoalTransactionCode" IS NOT NULL
+                  AND (
+                    b2."matchedGoalTransactionCode" = f."goalTransactionCode"
+                    OR f."goalTransactionCode" = ANY(string_to_array(
+                      CASE
+                        WHEN b2."matchedGoalTransactionCode" LIKE 'MANUAL:%' THEN split_part(b2."matchedGoalTransactionCode", ':', 3)
+                        WHEN b2."matchedGoalTransactionCode" LIKE '%:%' THEN split_part(b2."matchedGoalTransactionCode", ':', 2)
+                        ELSE b2."matchedGoalTransactionCode"
+                      END,
+                      ','
+                    ))
+                  )
+              )
+          ) as reviewed_count
         FROM fund_transactions f
         JOIN goals g ON f."goalId" = g."id"
         WHERE f."transactionDate"::date >= $1::date AND f."transactionDate"::date <= $2::date
           AND (f."source" IS NULL OR f."source" != 'Transfer_Reversal')
+          -- Only include transactions NOT matched by transactionId (these are the variance/unmatched ones)
           AND NOT EXISTS (
             SELECT 1 FROM bank_goal_transactions b
             WHERE b."goalNumber" = g."goalNumber"
               AND b."transactionId" = f."transactionId"
               AND b."transactionType" = f."transactionType"
               AND b."transactionDate"::date >= $1::date AND b."transactionDate"::date <= $2::date
-              AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
+              AND (b."transactionId" IS NULL OR (b."transactionId" NOT LIKE '%Transfer_Reversal%' AND b."transactionId" != 'RT Change'))
           )
         GROUP BY g."goalNumber"
       ),
@@ -315,14 +357,31 @@ export class SmartMatcher {
     // - MATCHED: Show only matched goals (no variance)
     // - VARIANCE: Show only variance goals (regardless of review status)
     // - REVIEWED: Show variance goals that have been fully reviewed
+    // - UNREVIEWED: Show variance goals that have NO reviewed transactions (all pending)
+    // - PARTIAL: Show variance goals that are partially reviewed (some pending, some reviewed)
     let filteredResults = results;
     if (filters?.status && filters.status !== 'ALL') {
-      if (filters.status === 'REVIEWED') {
-        // Show variance goals that are fully reviewed
-        filteredResults = results.filter(r => r.status === 'VARIANCE' && r.reviewStatus === 'REVIEWED');
-      } else {
-        // MATCHED or VARIANCE
-        filteredResults = results.filter(r => r.status === filters.status);
+      switch (filters.status) {
+        case 'REVIEWED':
+          // Show variance goals that are fully reviewed (no pending)
+          filteredResults = results.filter(r => r.status === 'VARIANCE' && r.reviewStatus === 'REVIEWED');
+          break;
+        case 'UNREVIEWED':
+          // Show variance goals with pending transactions (NOT fully reviewed)
+          // This includes both UNREVIEWED and PARTIALLY_REVIEWED
+          filteredResults = results.filter(r =>
+            r.status === 'VARIANCE' &&
+            (r.reviewStatus === 'UNREVIEWED' || r.reviewStatus === 'PARTIALLY_REVIEWED')
+          );
+          break;
+        case 'PARTIAL':
+          // Show variance goals that are partially reviewed
+          filteredResults = results.filter(r => r.status === 'VARIANCE' && r.reviewStatus === 'PARTIALLY_REVIEWED');
+          break;
+        case 'MATCHED':
+        case 'VARIANCE':
+          filteredResults = results.filter(r => r.status === filters.status);
+          break;
       }
     }
 
@@ -387,7 +446,7 @@ export class SmartMatcher {
           SUM(b."totalAmount") as total
         FROM bank_goal_transactions b
         WHERE b."transactionDate"::date >= $1::date AND b."transactionDate"::date <= $2::date
-          AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
+          AND (b."transactionId" IS NULL OR (b."transactionId" NOT LIKE '%Transfer_Reversal%' AND b."transactionId" != 'RT Change'))
         GROUP BY b."goalNumber"
       ),
       goal_fund_summary AS (
@@ -510,13 +569,16 @@ export class SmartMatcher {
     unmatchedGoalTxn: string[];
   }> {
     // Get bank transactions for this goal
-    // Exclude Transfer_Reversal transactions (transactionId contains "Transfer_Reversal")
+    // Exclude Transfer_Reversal transactions (transactionId contains "Transfer_Reversal") and RT Change
     const bankTxns = await prisma.bankGoalTransaction.findMany({
       where: {
         goalNumber,
         transactionDate: { gte: startDate, lte: endDate },
         ...(transactionType && { transactionType }),
-        NOT: { transactionId: { contains: 'Transfer_Reversal' } },
+        AND: [
+          { NOT: { transactionId: { contains: 'Transfer_Reversal' } } },
+          { NOT: { transactionId: 'RT Change' } },
+        ],
       },
       orderBy: { transactionDate: 'desc' },
     });
@@ -552,7 +614,9 @@ export class SmartMatcher {
       orderBy: { transactionDate: 'desc' },
     });
 
-    // Group fund transactions by goalTransactionCode to get goal transactions
+    // Group fund transactions by goalTransactionCode AND transactionType to get goal transactions
+    // This is important because the same goalTransactionCode can have both DEPOSIT and WITHDRAWAL
+    // (e.g., when a deposit and withdrawal happen on the same day with the same transactionId)
     const goalTxnByCode = new Map<string, {
       ids: string[];
       total: number;
@@ -568,11 +632,15 @@ export class SmartMatcher {
       reviewNotes: string | null;
       reviewedBy: string | null;
       reviewedAt: Date | null;
+      // Store the original goalTransactionCode for matching purposes
+      originalCode: string;
     }>();
     for (const ft of fundTxns) {
-      const code = ft.goalTransactionCode;
+      // Use composite key: goalTransactionCode + transactionType
+      const code = `${ft.goalTransactionCode}|${ft.transactionType}`;
       if (!goalTxnByCode.has(code)) {
         goalTxnByCode.set(code, {
+          originalCode: ft.goalTransactionCode,
           ids: [],
           total: 0,
           date: ft.transactionDate,
@@ -637,12 +705,14 @@ export class SmartMatcher {
       const goalCodes = goalCodesStr.split(',');
 
       // Find all matching goal transactions
+      // Note: goalCodes are originalCodes (without transactionType suffix)
+      // We need to search by originalCode since the map key now includes transactionType
       const allFundIds: string[] = [];
       let fundTotal = 0;
       for (const goalCode of goalCodes) {
-        if (goalTxnByCode.has(goalCode)) {
-          const fundGroup = goalTxnByCode.get(goalCode)!;
-          if (!fundGroup.ids.some(id => matchedFundIds.has(id))) {
+        // Search for entries where originalCode matches
+        for (const [_, fundGroup] of goalTxnByCode.entries()) {
+          if (fundGroup.originalCode === goalCode && !fundGroup.ids.some(id => matchedFundIds.has(id))) {
             allFundIds.push(...fundGroup.ids);
             fundTotal += fundGroup.total;
           }
@@ -831,9 +901,10 @@ export class SmartMatcher {
     }
 
     // Build goal transactions from grouped data
+    // Note: Use originalCode for goalTransactionCode (the map key includes transactionType but we don't want that in the output)
     const goalTransactions: GoalTransaction[] = Array.from(goalTxnByCode.entries()).map(
-      ([code, group]) => ({
-        goalTransactionCode: code,
+      ([_, group]) => ({
+        goalTransactionCode: group.originalCode,
         transactionDate: group.date,
         transactionId: group.transactionId,
         transactionType: group.type,
@@ -850,13 +921,48 @@ export class SmartMatcher {
       })
     );
 
-    // Determine unmatched goal transactions (by goalTransactionCode)
-    const matchedGoalTxnCodes = new Set<string>();
+    // Determine unmatched goal transactions (by composite key: goalTransactionCode|transactionType)
+    // We use the composite key because the same goalTransactionCode can have both DEPOSIT and WITHDRAWAL
+    const matchedGoalTxnKeys = new Set<string>();
     for (const match of matches) {
-      // Find which goal transaction codes are matched based on their fund transaction IDs
-      for (const [code, group] of goalTxnByCode.entries()) {
+      // Find which goal transaction keys are matched based on their fund transaction IDs
+      for (const [compositeKey, group] of goalTxnByCode.entries()) {
         if (group.ids.some((id: string) => match.fundIds.includes(id))) {
-          matchedGoalTxnCodes.add(code);
+          matchedGoalTxnKeys.add(compositeKey);
+        }
+      }
+    }
+
+    // Auto-persist non-MANUAL matches to database
+    // This ensures the summary correctly identifies matched transactions
+    const nonManualMatches = matches.filter(m => m.matchType !== 'MANUAL');
+    if (nonManualMatches.length > 0) {
+      for (const match of nonManualMatches) {
+        // Get all goal transaction codes for this match
+        // Use originalCode (not the composite key which includes transactionType)
+        const goalCodesForMatch: string[] = [];
+        for (const [_, group] of goalTxnByCode.entries()) {
+          if (group.ids.some((id: string) => match.fundIds.includes(id))) {
+            goalCodesForMatch.push(group.originalCode);
+          }
+        }
+
+        if (goalCodesForMatch.length > 0) {
+          // For algorithmic matches, store as: {matchType}:{goalTransactionCode(s)}
+          // This distinguishes from MANUAL matches and allows tracking match type
+          const matchCode = goalCodesForMatch.length === 1
+            ? goalCodesForMatch[0]  // Single goal code - store directly
+            : `${match.matchType}:${goalCodesForMatch.join(',')}`; // Multiple - prefix with type
+
+          await prisma.bankGoalTransaction.updateMany({
+            where: { id: { in: match.bankIds } },
+            data: {
+              matchedGoalTransactionCode: matchCode,
+              matchedAt: new Date(),
+              matchScore: Math.round(match.confidence * 100),
+              updatedAt: new Date(),
+            },
+          });
         }
       }
     }
@@ -867,7 +973,7 @@ export class SmartMatcher {
       matches,
       unmatchedBank: bankTxns.filter(b => !matchedBankIds.has(b.id)).map(b => b.id),
       unmatchedGoalTxn: goalTransactions
-        .filter(gt => !matchedGoalTxnCodes.has(gt.goalTransactionCode))
+        .filter(gt => !matchedGoalTxnKeys.has(`${gt.goalTransactionCode}|${gt.transactionType}`))
         .map(gt => gt.goalTransactionCode),
     };
   }
@@ -1075,46 +1181,89 @@ export class SmartMatcher {
     pendingCount: number;
     byTag: Record<string, number>;
   }> {
-    // Get unmatched bank transactions for this goal
+    // Get bank transactions not matched by transactionId (variance transactions)
+    // Include their review status (tagged or Smart Matched)
     const bankQuery = `
       SELECT
         b.id,
-        b."reviewTag"
+        b."reviewTag",
+        b."matchedGoalTransactionCode"
       FROM bank_goal_transactions b
-      LEFT JOIN fund_transactions f ON b."matchedGoalTransactionCode" = f."goalTransactionCode"
       WHERE b."goalNumber" = $1
         AND b."transactionDate"::date >= $2::date
         AND b."transactionDate"::date <= $3::date
-        AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
-        AND f.id IS NULL
+        AND (b."transactionId" IS NULL OR (b."transactionId" NOT LIKE '%Transfer_Reversal%' AND b."transactionId" != 'RT Change'))
+        -- Only transactions NOT matched by transactionId (variance transactions)
+        AND NOT EXISTS (
+          SELECT 1 FROM fund_transactions f
+          JOIN goals g ON f."goalId" = g.id
+          WHERE g."goalNumber" = b."goalNumber"
+            AND f."transactionId" = b."transactionId"
+            AND f."transactionType" = b."transactionType"
+            AND f."transactionDate"::date >= $2::date AND f."transactionDate"::date <= $3::date
+            AND (f."source" IS NULL OR f."source" != 'Transfer_Reversal')
+        )
     `;
     const unmatchedBank = await prisma.$queryRawUnsafe(bankQuery, goalNumber, startDate, endDate) as any[];
 
-    // Get unmatched goal transactions for this goal
+    // Get goal transactions not matched by transactionId (variance transactions)
+    // Check if they are tagged or referenced by a bank's matchedGoalTransactionCode
     const goalQuery = `
       SELECT
         f."goalTransactionCode",
-        f."reviewTag"
+        f."reviewTag",
+        CASE WHEN EXISTS (
+          SELECT 1 FROM bank_goal_transactions b
+          WHERE b."goalNumber" = g."goalNumber"
+            AND b."matchedGoalTransactionCode" IS NOT NULL
+            AND (
+              b."matchedGoalTransactionCode" = f."goalTransactionCode"
+              OR f."goalTransactionCode" = ANY(string_to_array(
+                CASE
+                  WHEN b."matchedGoalTransactionCode" LIKE 'MANUAL:%' THEN split_part(b."matchedGoalTransactionCode", ':', 3)
+                  WHEN b."matchedGoalTransactionCode" LIKE '%:%' THEN split_part(b."matchedGoalTransactionCode", ':', 2)
+                  ELSE b."matchedGoalTransactionCode"
+                END,
+                ','
+              ))
+            )
+        ) THEN true ELSE false END as is_smart_matched
       FROM fund_transactions f
       JOIN goals g ON f."goalId" = g.id
-      LEFT JOIN bank_goal_transactions b ON f."goalTransactionCode" = b."matchedGoalTransactionCode"
       WHERE g."goalNumber" = $1
         AND f."transactionDate"::date >= $2::date
         AND f."transactionDate"::date <= $3::date
         AND (f."source" IS NULL OR f."source" != 'Transfer_Reversal')
-        AND b.id IS NULL
-      GROUP BY f."goalTransactionCode", f."reviewTag"
+        -- Only transactions NOT matched by transactionId (variance transactions)
+        AND NOT EXISTS (
+          SELECT 1 FROM bank_goal_transactions b
+          WHERE b."goalNumber" = g."goalNumber"
+            AND b."transactionId" = f."transactionId"
+            AND b."transactionType" = f."transactionType"
+            AND b."transactionDate"::date >= $2::date AND b."transactionDate"::date <= $3::date
+            AND (b."transactionId" IS NULL OR (b."transactionId" NOT LIKE '%Transfer_Reversal%' AND b."transactionId" != 'RT Change'))
+        )
+      GROUP BY f."goalTransactionCode", f."reviewTag", g."goalNumber"
     `;
     const unmatchedGoal = await prisma.$queryRawUnsafe(goalQuery, goalNumber, startDate, endDate) as any[];
 
     // Combine and count
+    // A transaction is "reviewed" if it has a reviewTag OR is matched by Smart Matcher
     const allUnmatched = [
-      ...unmatchedBank.map(b => ({ type: 'BANK', reviewTag: b.reviewTag })),
-      ...unmatchedGoal.map(g => ({ type: 'GOAL', reviewTag: g.reviewTag })),
+      ...unmatchedBank.map(b => ({
+        type: 'BANK',
+        reviewTag: b.reviewTag,
+        isReviewed: b.reviewTag !== null || b.matchedGoalTransactionCode !== null,
+      })),
+      ...unmatchedGoal.map(g => ({
+        type: 'GOAL',
+        reviewTag: g.reviewTag,
+        isReviewed: g.reviewTag !== null || g.is_smart_matched === true,
+      })),
     ];
 
     const totalUnmatched = allUnmatched.length;
-    const reviewedCount = allUnmatched.filter(t => t.reviewTag !== null).length;
+    const reviewedCount = allUnmatched.filter(t => t.isReviewed).length;
     const pendingCount = totalUnmatched - reviewedCount;
 
     // Count by tag
@@ -1128,12 +1277,12 @@ export class SmartMatcher {
     let status: 'PENDING' | 'PARTIALLY_REVIEWED' | 'FULLY_REVIEWED' | 'NO_VARIANCES';
     if (totalUnmatched === 0) {
       status = 'NO_VARIANCES';
-    } else if (reviewedCount === 0) {
-      status = 'PENDING';
-    } else if (reviewedCount === totalUnmatched) {
+    } else if (pendingCount === 0) {
       status = 'FULLY_REVIEWED';
-    } else {
+    } else if (reviewedCount > 0) {
       status = 'PARTIALLY_REVIEWED';
+    } else {
+      status = 'PENDING';
     }
 
     return {
@@ -1200,6 +1349,7 @@ export class SmartMatcher {
 
     // Combined query for unmatched bank and goal transactions
     // Uses matchedGoalTransactionCode IS NULL to determine truly unmatched bank transactions
+    // Includes fund distribution columns (XUMMF, XUBF, XUDEF, XUREF) for actionable exports
     const query = `
       WITH unmatched_bank AS (
         SELECT
@@ -1211,7 +1361,10 @@ export class SmartMatcher {
           b."transactionDate" as transaction_date,
           b."transactionType" as transaction_type,
           b."totalAmount" as amount,
-          NULL as fund_code,
+          b."xummfAmount" as xummf_amount,
+          b."xubfAmount" as xubf_amount,
+          b."xudefAmount" as xudef_amount,
+          b."xurefAmount" as xuref_amount,
           b."transactionId" as source_transaction_id,
           b."reviewTag"::text as review_tag,
           b."reviewNotes" as review_notes,
@@ -1223,7 +1376,7 @@ export class SmartMatcher {
         WHERE b."transactionDate"::date >= $1::date
           AND b."transactionDate"::date <= $2::date
           AND b."matchedGoalTransactionCode" IS NULL
-          AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
+          AND (b."transactionId" IS NULL OR (b."transactionId" NOT LIKE '%Transfer_Reversal%' AND b."transactionId" != 'RT Change'))
       ),
       unmatched_goal AS (
         SELECT
@@ -1235,7 +1388,10 @@ export class SmartMatcher {
           f."transactionDate" as transaction_date,
           f."transactionType" as transaction_type,
           SUM(f."amount") as amount,
-          NULL as fund_code,
+          SUM(CASE WHEN fund."fundCode" = 'XUMMF' THEN f."amount" ELSE 0 END) as xummf_amount,
+          SUM(CASE WHEN fund."fundCode" = 'XUBF' THEN f."amount" ELSE 0 END) as xubf_amount,
+          SUM(CASE WHEN fund."fundCode" = 'XUDEF' THEN f."amount" ELSE 0 END) as xudef_amount,
+          SUM(CASE WHEN fund."fundCode" = 'XUREF' THEN f."amount" ELSE 0 END) as xuref_amount,
           f."transactionId" as source_transaction_id,
           MAX(f."reviewTag"::text) as review_tag,
           MAX(f."reviewNotes") as review_notes,
@@ -1245,6 +1401,7 @@ export class SmartMatcher {
         JOIN goals g ON f."goalId" = g.id
         JOIN accounts a ON g."accountId" = a.id
         JOIN clients c ON a."clientId" = c.id
+        JOIN funds fund ON f."fundId" = fund.id
         LEFT JOIN bank_goal_transactions b ON f."goalTransactionCode" = b."matchedGoalTransactionCode"
         WHERE f."transactionDate"::date >= $1::date
           AND f."transactionDate"::date <= $2::date
@@ -1286,7 +1443,10 @@ export class SmartMatcher {
         transactionDate: r.transaction_date,
         transactionType: r.transaction_type,
         amount: Number(r.amount),
-        fundCode: r.fund_code,
+        xummfAmount: Number(r.xummf_amount) || 0,
+        xubfAmount: Number(r.xubf_amount) || 0,
+        xudefAmount: Number(r.xudef_amount) || 0,
+        xurefAmount: Number(r.xuref_amount) || 0,
         sourceTransactionId: r.source_transaction_id,
         reviewTag: r.review_tag,
         reviewNotes: r.review_notes,

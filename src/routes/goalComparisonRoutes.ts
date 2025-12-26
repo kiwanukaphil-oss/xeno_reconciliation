@@ -909,7 +909,7 @@ router.get('/variance-transactions/export', async (req: Request, res: Response, 
     // Main data sheet
     const worksheet = workbook.addWorksheet('Variance Transactions');
 
-    // Define columns
+    // Define columns - includes fund distribution for actionable exports
     worksheet.columns = [
       { header: 'Source', key: 'transactionSource', width: 10 },
       { header: 'Goal Number', key: 'goalNumber', width: 25 },
@@ -918,6 +918,10 @@ router.get('/variance-transactions/export', async (req: Request, res: Response, 
       { header: 'Transaction Date', key: 'transactionDate', width: 15 },
       { header: 'Type', key: 'transactionType', width: 12 },
       { header: 'Amount', key: 'amount', width: 15 },
+      { header: 'XUMMF', key: 'xummfAmount', width: 15 },
+      { header: 'XUBF', key: 'xubfAmount', width: 15 },
+      { header: 'XUDEF', key: 'xudefAmount', width: 15 },
+      { header: 'XUREF', key: 'xurefAmount', width: 15 },
       { header: 'Source Txn ID', key: 'sourceTransactionId', width: 15 },
       { header: 'Review Tag', key: 'reviewTag', width: 25 },
       { header: 'Review Notes', key: 'reviewNotes', width: 40 },
@@ -943,6 +947,10 @@ router.get('/variance-transactions/export', async (req: Request, res: Response, 
         transactionDate: row.transactionDate ? new Date(row.transactionDate).toISOString().split('T')[0] : '',
         transactionType: row.transactionType,
         amount: row.amount,
+        xummfAmount: row.xummfAmount || 0,
+        xubfAmount: row.xubfAmount || 0,
+        xudefAmount: row.xudefAmount || 0,
+        xurefAmount: row.xurefAmount || 0,
         sourceTransactionId: row.sourceTransactionId || '',
         reviewTag: row.reviewTag ? row.reviewTag.replace(/_/g, ' ') : '',
         reviewNotes: row.reviewNotes || '',
@@ -963,8 +971,9 @@ router.get('/variance-transactions/export', async (req: Request, res: Response, 
       'UNDER_INVESTIGATION': 'FFD0D0FF',
     };
 
+    // Review Tag is now column M (after adding 4 fund columns)
     for (let i = 2; i <= result.data.length + 1; i++) {
-      const cell = worksheet.getCell(`I${i}`);
+      const cell = worksheet.getCell(`M${i}`);
       const tag = result.data[i - 2]?.reviewTag;
       if (tag && tagColors[tag]) {
         cell.fill = {

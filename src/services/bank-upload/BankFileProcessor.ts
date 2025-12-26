@@ -36,7 +36,7 @@ export class BankFileProcessor {
       logger.info('Step 2: Validating bank transactions');
       await BankUploadBatchManager.updateBatchStatus(batchId, 'VALIDATING');
 
-      const validationResult = BankTransactionValidator.validateBatch(transactions);
+      const validationResult = await BankTransactionValidator.validateBatch(transactions);
 
       // Get validation statistics - only CRITICAL errors block upload
       const criticalErrors = validationResult.allErrors.filter((e) => e.severity === 'CRITICAL');
