@@ -34,6 +34,8 @@ import {
   bulkReviewTransactions,
   createManualMatch,
   VARIANCE_REVIEW_TAGS,
+  findReversalCandidates,
+  linkReversal,
 } from "../../services/api";
 import type {
   SmartMatchingResult,
@@ -42,6 +44,7 @@ import type {
   VarianceTransaction,
   VarianceTransactionsSummary,
   VarianceReviewTag,
+  ReversalCandidate,
 } from "../../services/api";
 
 interface GoalSummary {
@@ -229,6 +232,13 @@ const GoalComparison = () => {
   const [matchingResult, setMatchingResult] = useState<SmartMatchingResult | null>(null);
   const [showMatchingResult, setShowMatchingResult] = useState(false);
   const [, setCurrentOffset] = useState(0);
+
+  // Reversal linking state
+  const [reversalSearchTxn, setReversalSearchTxn] = useState<{id: string; amount: number; transactionType: string} | null>(null);
+  const [reversalCandidates, setReversalCandidates] = useState<ReversalCandidate[]>([]);
+  const [reversalLoading, setReversalLoading] = useState(false);
+  const [showReversalModal, setShowReversalModal] = useState(false);
+  const [linkingReversal, setLinkingReversal] = useState(false);
 
   useEffect(() => {
     // Set default date range to last 30 days
@@ -527,6 +537,64 @@ const GoalComparison = () => {
       setError((err as Error).message);
     } finally {
       setManualMatching(false);
+    }
+  };
+
+  // Find reversal candidates for a transaction
+  const handleFindReversals = async (txn: {id: string; amount: number; transactionType: string}) => {
+    setReversalSearchTxn(txn);
+    setReversalLoading(true);
+    setShowReversalModal(true);
+    setReversalCandidates([]);
+
+    try {
+      const dateRange = startDate && endDate ? { startDate, endDate } : undefined;
+      const result = await findReversalCandidates(txn.id, dateRange);
+      setReversalCandidates(result.candidates || []);
+    } catch (err) {
+      setError((err as Error).message);
+      setShowReversalModal(false);
+    } finally {
+      setReversalLoading(false);
+    }
+  };
+
+  // Link two transactions as reversal pair
+  const handleLinkReversal = async (candidateId: string) => {
+    if (!reversalSearchTxn) return;
+
+    setLinkingReversal(true);
+    try {
+      await linkReversal({
+        transactionId1: reversalSearchTxn.id,
+        transactionId2: candidateId,
+        linkedBy: 'User',
+      });
+
+      // Close modal and refresh data
+      setShowReversalModal(false);
+      setReversalSearchTxn(null);
+      setReversalCandidates([]);
+
+      // Refresh drilldown data
+      if (expandedGoal) {
+        const result = await fetchGoalTransactionsWithMatching(expandedGoal, {
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+        });
+        setDrilldownData({
+          bankTransactions: result.bankTransactions,
+          goalTransactions: result.goalTransactions,
+          summary: result.summary,
+        });
+      }
+
+      // Refresh the main goal list
+      await fetchData(pagination.page);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLinkingReversal(false);
     }
   };
 
@@ -1432,16 +1500,29 @@ const GoalComparison = () => {
                                                 </button>
                                               </div>
                                             ) : (
-                                              <button
-                                                onClick={() => {
-                                                  setDrilldownReviewingTxn({ id: txn.id, type: 'BANK' });
-                                                  setDrilldownReviewTag('');
-                                                  setDrilldownReviewNotes('');
-                                                }}
-                                                className="w-full text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded hover:bg-orange-200"
-                                              >
-                                                Tag Variance
-                                              </button>
+                                              <div className="flex gap-1">
+                                                <button
+                                                  onClick={() => {
+                                                    setDrilldownReviewingTxn({ id: txn.id, type: 'BANK' });
+                                                    setDrilldownReviewTag('');
+                                                    setDrilldownReviewNotes('');
+                                                  }}
+                                                  className="flex-1 text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded hover:bg-orange-200"
+                                                >
+                                                  Tag Variance
+                                                </button>
+                                                <button
+                                                  onClick={() => handleFindReversals({
+                                                    id: txn.id,
+                                                    amount: txn.totalAmount,
+                                                    transactionType: txn.transactionType,
+                                                  })}
+                                                  className="text-xs px-2 py-1 bg-purple-100 text-purple-700 rounded hover:bg-purple-200"
+                                                  title="Find matching reversal transaction"
+                                                >
+                                                  <RotateCcw className="h-3 w-3" />
+                                                </button>
+                                              </div>
                                             )}
                                           </div>
                                         )}
@@ -2427,6 +2508,135 @@ const GoalComparison = () => {
                     )}
                   </button>
                 )}
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reversal Candidates Modal */}
+      {showReversalModal && (
+        <div className="fixed inset-0 z-50 overflow-y-auto">
+          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
+            {/* Backdrop */}
+            <div
+              className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75"
+              onClick={() => {
+                setShowReversalModal(false);
+                setReversalSearchTxn(null);
+                setReversalCandidates([]);
+              }}
+            ></div>
+
+            {/* Modal Panel */}
+            <div className="relative inline-block w-full max-w-lg p-6 my-8 overflow-hidden text-left align-middle transition-all transform bg-white shadow-xl rounded-lg">
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-lg font-semibold text-gray-900 flex items-center gap-2">
+                  <RotateCcw className="h-5 w-5 text-purple-600" />
+                  Find Reversal Match
+                </h3>
+                <button
+                  onClick={() => {
+                    setShowReversalModal(false);
+                    setReversalSearchTxn(null);
+                    setReversalCandidates([]);
+                  }}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X className="h-5 w-5" />
+                </button>
+              </div>
+
+              {reversalSearchTxn && (
+                <div className="mb-4 p-3 bg-gray-50 rounded-lg">
+                  <p className="text-sm text-gray-600">Source Transaction:</p>
+                  <p className="font-medium">
+                    <span className={`text-xs px-1.5 py-0.5 rounded mr-2 ${
+                      reversalSearchTxn.transactionType === 'DEPOSIT' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                    }`}>
+                      {reversalSearchTxn.transactionType}
+                    </span>
+                    {formatCurrency(reversalSearchTxn.amount)}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Looking for {reversalSearchTxn.transactionType === 'DEPOSIT' ? 'WITHDRAW' : 'DEPOSIT'} of same amount
+                  </p>
+                </div>
+              )}
+
+              {reversalLoading ? (
+                <div className="flex items-center justify-center py-8">
+                  <Loader2 className="h-8 w-8 animate-spin text-purple-600" />
+                  <span className="ml-2 text-gray-600">Searching for candidates...</span>
+                </div>
+              ) : reversalCandidates.length === 0 ? (
+                <div className="text-center py-8 text-gray-500">
+                  <AlertCircle className="h-12 w-12 mx-auto mb-3 text-gray-400" />
+                  <p>No matching reversal candidates found.</p>
+                  <p className="text-sm mt-1">
+                    Candidates must have same goal, same amount, and opposite transaction type.
+                  </p>
+                </div>
+              ) : (
+                <div className="space-y-2 max-h-80 overflow-y-auto">
+                  <p className="text-sm text-gray-600 mb-2">
+                    {reversalCandidates.length} potential reversal{reversalCandidates.length > 1 ? 's' : ''} found:
+                  </p>
+                  {reversalCandidates.map((candidate) => (
+                    <div
+                      key={candidate.id}
+                      className="border rounded p-3 hover:bg-purple-50 transition-colors"
+                    >
+                      <div className="flex justify-between items-start">
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-xs">{formatDate(candidate.transactionDate)}</span>
+                            <span className={`text-xs px-1.5 py-0.5 rounded ${
+                              candidate.transactionType === 'DEPOSIT' ? 'bg-green-100 text-green-800' : 'bg-red-100 text-red-800'
+                            }`}>
+                              {candidate.transactionType}
+                            </span>
+                          </div>
+                          <p className="text-sm font-bold text-purple-600 mt-1">
+                            {formatCurrency(candidate.totalAmount)}
+                          </p>
+                          <p className="text-xs text-gray-500">
+                            ID: {candidate.transactionId} | {candidate.goalNumber}
+                          </p>
+                          {candidate.reviewTag && (
+                            <span className="inline-block mt-1 text-xs px-1.5 py-0.5 bg-blue-100 text-blue-700 rounded">
+                              {candidate.reviewTag}
+                            </span>
+                          )}
+                        </div>
+                        <button
+                          onClick={() => handleLinkReversal(candidate.id)}
+                          disabled={linkingReversal}
+                          className="ml-2 px-3 py-1.5 bg-purple-600 text-white text-sm rounded hover:bg-purple-700 disabled:bg-gray-400"
+                        >
+                          {linkingReversal ? (
+                            <Loader2 className="h-4 w-4 animate-spin" />
+                          ) : (
+                            'Link'
+                          )}
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+
+              <div className="mt-4 flex justify-end">
+                <button
+                  onClick={() => {
+                    setShowReversalModal(false);
+                    setReversalSearchTxn(null);
+                    setReversalCandidates([]);
+                  }}
+                  className="px-4 py-2 bg-gray-200 text-gray-800 rounded hover:bg-gray-300"
+                >
+                  Cancel
+                </button>
               </div>
             </div>
           </div>
