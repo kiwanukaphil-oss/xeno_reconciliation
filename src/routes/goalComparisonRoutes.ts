@@ -612,4 +612,322 @@ router.post('/run-matching', async (req: Request, res: Response, next: NextFunct
   }
 });
 
+// ============================================================================
+// VARIANCE REVIEW ENDPOINTS
+// ============================================================================
+
+/**
+ * Review a single bank transaction
+ * POST /api/goal-comparison/bank-transactions/:transactionId/review
+ */
+router.post('/bank-transactions/:transactionId/review', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { transactionId } = req.params;
+    const { reviewTag, reviewNotes, reviewedBy } = req.body;
+
+    if (!transactionId) {
+      throw new AppError(400, 'Transaction ID is required');
+    }
+
+    if (!reviewTag) {
+      throw new AppError(400, 'Review tag is required');
+    }
+
+    if (!reviewedBy) {
+      throw new AppError(400, 'Reviewed by is required');
+    }
+
+    const result = await SmartMatcher.reviewBankTransaction(
+      transactionId,
+      reviewTag,
+      reviewNotes || null,
+      reviewedBy
+    );
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error reviewing bank transaction:', error);
+    next(error);
+  }
+});
+
+/**
+ * Review goal transactions by goalTransactionCode
+ * POST /api/goal-comparison/goal-transactions/:goalTransactionCode/review
+ */
+router.post('/goal-transactions/:goalTransactionCode/review', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { goalTransactionCode } = req.params;
+    const { reviewTag, reviewNotes, reviewedBy } = req.body;
+
+    if (!goalTransactionCode) {
+      throw new AppError(400, 'Goal transaction code is required');
+    }
+
+    if (!reviewTag) {
+      throw new AppError(400, 'Review tag is required');
+    }
+
+    if (!reviewedBy) {
+      throw new AppError(400, 'Reviewed by is required');
+    }
+
+    const result = await SmartMatcher.reviewGoalTransaction(
+      goalTransactionCode,
+      reviewTag,
+      reviewNotes || null,
+      reviewedBy
+    );
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error reviewing goal transaction:', error);
+    next(error);
+  }
+});
+
+/**
+ * Bulk review multiple transactions
+ * POST /api/goal-comparison/review/bulk
+ */
+router.post('/review/bulk', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { bankTransactionIds, goalTransactionCodes, reviewTag, reviewNotes, reviewedBy } = req.body;
+
+    if (!reviewTag) {
+      throw new AppError(400, 'Review tag is required');
+    }
+
+    if (!reviewedBy) {
+      throw new AppError(400, 'Reviewed by is required');
+    }
+
+    const result = await SmartMatcher.bulkReview(
+      bankTransactionIds || [],
+      goalTransactionCodes || [],
+      reviewTag,
+      reviewNotes || null,
+      reviewedBy
+    );
+
+    res.json({
+      success: true,
+      updated: result,
+    });
+  } catch (error) {
+    logger.error('Error bulk reviewing transactions:', error);
+    next(error);
+  }
+});
+
+/**
+ * Get review status for a specific goal
+ * GET /api/goal-comparison/:goalNumber/review-status
+ */
+router.get('/:goalNumber/review-status', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { goalNumber } = req.params;
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+
+    if (!goalNumber) {
+      throw new AppError(400, 'Goal number is required');
+    }
+
+    // Default to last 30 days if no dates provided
+    const endDateStr = endDate || new Date().toISOString().split('T')[0];
+    const startDateStr = startDate || new Date(new Date(endDateStr).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const result = await SmartMatcher.getGoalReviewStatus(goalNumber, startDateStr, endDateStr);
+
+    res.json(result);
+  } catch (error) {
+    logger.error('Error getting goal review status:', error);
+    next(error);
+  }
+});
+
+/**
+ * Get all variance transactions for review
+ * GET /api/goal-comparison/variance-transactions
+ */
+router.get('/variance-transactions', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const reviewStatus = req.query.reviewStatus as 'PENDING' | 'REVIEWED' | 'ALL';
+    const reviewTag = req.query.reviewTag as string;
+    const goalNumber = req.query.goalNumber as string;
+    const clientSearch = req.query.clientSearch as string;
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+
+    // Default to last 30 days if no dates provided
+    const endDateStr = endDate || new Date().toISOString().split('T')[0];
+    const startDateStr = startDate || new Date(new Date(endDateStr).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const result = await SmartMatcher.getVarianceTransactions(startDateStr, endDateStr, {
+      reviewStatus,
+      reviewTag,
+      goalNumber,
+      clientSearch,
+    });
+
+    // Apply pagination
+    const skip = (page - 1) * limit;
+    const paginatedData = result.data.slice(skip, skip + limit);
+
+    res.json({
+      success: true,
+      data: paginatedData,
+      summary: result.summary,
+      pagination: {
+        page,
+        limit,
+        total: result.data.length,
+        totalPages: Math.ceil(result.data.length / limit),
+      },
+      dateRange: {
+        startDate: startDateStr,
+        endDate: endDateStr,
+      },
+    });
+  } catch (error) {
+    logger.error('Error getting variance transactions:', error);
+    next(error);
+  }
+});
+
+/**
+ * Export variance transactions to Excel
+ * GET /api/goal-comparison/variance-transactions/export
+ */
+router.get('/variance-transactions/export', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const reviewStatus = req.query.reviewStatus as 'PENDING' | 'REVIEWED' | 'ALL';
+    const reviewTag = req.query.reviewTag as string;
+    const goalNumber = req.query.goalNumber as string;
+    const clientSearch = req.query.clientSearch as string;
+
+    // Default to last 30 days if no dates provided
+    const endDateStr = endDate || new Date().toISOString().split('T')[0];
+    const startDateStr = startDate || new Date(new Date(endDateStr).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    const result = await SmartMatcher.getVarianceTransactions(startDateStr, endDateStr, {
+      reviewStatus,
+      reviewTag,
+      goalNumber,
+      clientSearch,
+    });
+
+    // Create Excel workbook
+    const ExcelJS = require('exceljs');
+    const workbook = new ExcelJS.Workbook();
+
+    // Main data sheet
+    const worksheet = workbook.addWorksheet('Variance Transactions');
+
+    // Define columns
+    worksheet.columns = [
+      { header: 'Source', key: 'transactionSource', width: 10 },
+      { header: 'Goal Number', key: 'goalNumber', width: 25 },
+      { header: 'Client Name', key: 'clientName', width: 30 },
+      { header: 'Account Number', key: 'accountNumber', width: 20 },
+      { header: 'Transaction Date', key: 'transactionDate', width: 15 },
+      { header: 'Type', key: 'transactionType', width: 12 },
+      { header: 'Amount', key: 'amount', width: 15 },
+      { header: 'Source Txn ID', key: 'sourceTransactionId', width: 15 },
+      { header: 'Review Tag', key: 'reviewTag', width: 25 },
+      { header: 'Review Notes', key: 'reviewNotes', width: 40 },
+      { header: 'Reviewed By', key: 'reviewedBy', width: 15 },
+      { header: 'Reviewed At', key: 'reviewedAt', width: 20 },
+    ];
+
+    // Style header row
+    worksheet.getRow(1).font = { bold: true };
+    worksheet.getRow(1).fill = {
+      type: 'pattern',
+      pattern: 'solid',
+      fgColor: { argb: 'FFE0E0E0' },
+    };
+
+    // Add data rows
+    for (const row of result.data) {
+      worksheet.addRow({
+        transactionSource: row.transactionSource,
+        goalNumber: row.goalNumber,
+        clientName: row.clientName,
+        accountNumber: row.accountNumber,
+        transactionDate: row.transactionDate ? new Date(row.transactionDate).toISOString().split('T')[0] : '',
+        transactionType: row.transactionType,
+        amount: row.amount,
+        sourceTransactionId: row.sourceTransactionId || '',
+        reviewTag: row.reviewTag ? row.reviewTag.replace(/_/g, ' ') : '',
+        reviewNotes: row.reviewNotes || '',
+        reviewedBy: row.reviewedBy || '',
+        reviewedAt: row.reviewedAt ? new Date(row.reviewedAt).toISOString().replace('T', ' ').slice(0, 19) : '',
+      });
+    }
+
+    // Add conditional formatting for review tags
+    const tagColors: Record<string, string> = {
+      'DUPLICATE_TRANSACTION': 'FFFFE0E0',
+      'NO_ACTION_NEEDED': 'FFE0FFE0',
+      'MISSING_IN_BANK': 'FFFFF0E0',
+      'MISSING_IN_GOAL': 'FFE0F0FF',
+      'TIMING_DIFFERENCE': 'FFF0E0FF',
+      'AMOUNT_DISCREPANCY': 'FFFFFFE0',
+      'DATA_ENTRY_ERROR': 'FFFFD0D0',
+      'UNDER_INVESTIGATION': 'FFD0D0FF',
+    };
+
+    for (let i = 2; i <= result.data.length + 1; i++) {
+      const cell = worksheet.getCell(`I${i}`);
+      const tag = result.data[i - 2]?.reviewTag;
+      if (tag && tagColors[tag]) {
+        cell.fill = {
+          type: 'pattern',
+          pattern: 'solid',
+          fgColor: { argb: tagColors[tag] },
+        };
+      }
+    }
+
+    // Summary sheet
+    const summarySheet = workbook.addWorksheet('Summary');
+    summarySheet.columns = [
+      { header: 'Metric', key: 'metric', width: 25 },
+      { header: 'Value', key: 'value', width: 15 },
+    ];
+    summarySheet.getRow(1).font = { bold: true };
+
+    summarySheet.addRow({ metric: 'Date Range', value: `${startDateStr} to ${endDateStr}` });
+    summarySheet.addRow({ metric: 'Total Unmatched', value: result.summary.totalUnmatched });
+    summarySheet.addRow({ metric: 'Pending Review', value: result.summary.pendingReview });
+    summarySheet.addRow({ metric: 'Reviewed', value: result.summary.reviewed });
+    summarySheet.addRow({ metric: '', value: '' });
+    summarySheet.addRow({ metric: 'By Tag:', value: '' });
+
+    for (const [tag, count] of Object.entries(result.summary.byTag)) {
+      summarySheet.addRow({ metric: tag.replace(/_/g, ' '), value: count });
+    }
+
+    // Set response headers
+    res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+    res.setHeader(
+      'Content-Disposition',
+      `attachment; filename="variance_review_${startDateStr}_to_${endDateStr}.xlsx"`
+    );
+
+    // Write to response
+    await workbook.xlsx.write(res);
+    res.end();
+  } catch (error) {
+    logger.error('Error exporting variance transactions:', error);
+    next(error);
+  }
+});
+
 export default router;

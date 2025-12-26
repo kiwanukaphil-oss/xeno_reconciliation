@@ -184,6 +184,12 @@ model FundTransaction {
   reference            String?
   notes                String?
 
+  // Variance Review Fields (for goal comparison review workflow - unmatched goal transactions)
+  reviewTag            VarianceReviewTag?
+  reviewNotes          String?  @db.Text
+  reviewedAt           DateTime?
+  reviewedBy           String?
+
   // Audit Fields
   rowNumber            Int      // Original CSV row number
   createdAt            DateTime @default(now())
@@ -207,6 +213,7 @@ model FundTransaction {
   @@index([goalId])
   @@index([fundId])
   @@index([transactionType])
+  @@index([reviewTag]) // For filtering by review tag
   @@index([transactionDate, accountId, goalId]) // Composite index for common queries
   @@map("fund_transactions")
 }
@@ -424,6 +431,12 @@ model BankGoalTransaction {
   matchedAt           DateTime?
   matchScore          Int?     // Confidence score (0-100)
 
+  // Variance Review Fields (for goal comparison review workflow)
+  reviewTag           VarianceReviewTag?
+  reviewNotes         String?  @db.Text
+  reviewedAt          DateTime?
+  reviewedBy          String?
+
   // Audit Fields
   rowNumber           Int      // Original CSV row number
   createdAt           DateTime @default(now())
@@ -445,6 +458,7 @@ model BankGoalTransaction {
   @@index([goalNumber])
   @@index([transactionId])
   @@index([matchedGoalTransactionCode])
+  @@index([reviewTag]) // For filtering by review tag
   @@index([goalNumber, transactionId, totalAmount]) // Composite index for matching
   @@map("bank_goal_transactions")
 }
@@ -667,4 +681,15 @@ enum VarianceResolutionStatus {
   REJECTED          // Rejected as error
   INVESTIGATING     // Under investigation
   RESOLVED          // Resolved/explained
+}
+
+enum VarianceReviewTag {
+  DUPLICATE_TRANSACTION   // Transaction appears twice
+  NO_ACTION_NEEDED        // Variance is expected/acceptable
+  MISSING_IN_BANK         // Transaction in goals but not in bank
+  MISSING_IN_GOAL         // Transaction in bank but not in goals
+  TIMING_DIFFERENCE       // Date mismatch, will reconcile later
+  AMOUNT_DISCREPANCY      // Amounts don't match
+  DATA_ENTRY_ERROR        // Incorrect data entry
+  UNDER_INVESTIGATION     // Needs further investigation
 }

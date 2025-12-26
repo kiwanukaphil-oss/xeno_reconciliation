@@ -15,6 +15,9 @@ import {
   RotateCcw,
   Play,
   X,
+  Tag,
+  FileSpreadsheet,
+  Save,
 } from "lucide-react";
 import {
   fetchGoalComparison,
@@ -23,11 +26,20 @@ import {
   runSmartMatching,
   fetchFundComparison,
   exportFundComparisonCSV,
+  fetchVarianceTransactions,
+  exportVarianceTransactionsExcel,
+  reviewBankTransaction,
+  reviewGoalTransaction,
+  bulkReviewTransactions,
+  VARIANCE_REVIEW_TAGS,
 } from "../../services/api";
 import type {
   SmartMatchingResult,
   FundComparisonRow,
   FundComparisonAggregates,
+  VarianceTransaction,
+  VarianceTransactionsSummary,
+  VarianceReviewTag,
 } from "../../services/api";
 
 interface GoalSummary {
@@ -44,8 +56,13 @@ interface GoalSummary {
   withdrawalVariance: number;
   withdrawalBankCount: number;
   withdrawalGoalTxnCount: number;
+  // Primary status based on amount comparison
   status: "MATCHED" | "VARIANCE";
   hasVariance: boolean;
+  // Review status for variance goals (independent of Smart Matching)
+  reviewStatus: "NOT_APPLICABLE" | "UNREVIEWED" | "PARTIALLY_REVIEWED" | "REVIEWED";
+  unreviewedCount: number;
+  reviewedCount: number;
 }
 
 interface Aggregates {
@@ -82,6 +99,11 @@ interface GoalTransactionWithMatch {
   fundTransactionIds: string[];
   matchInfo: MatchInfo | null;
   isMatched: boolean;
+  // Review fields
+  reviewTag: VarianceReviewTag | null;
+  reviewNotes: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
 }
 
 interface BankTransactionWithMatch {
@@ -96,6 +118,11 @@ interface BankTransactionWithMatch {
   xurefAmount: number;
   matchInfo: MatchInfo | null;
   isMatched: boolean;
+  // Review fields
+  reviewTag: VarianceReviewTag | null;
+  reviewNotes: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
 }
 
 interface TransactionDrilldown {
@@ -123,7 +150,7 @@ interface Pagination {
 
 const GoalComparison = () => {
   // Tab state
-  const [activeTab, setActiveTab] = useState<'goal' | 'fund'>('goal');
+  const [activeTab, setActiveTab] = useState<'goal' | 'fund' | 'variance'>('goal');
 
   // Goal comparison state
   const [data, setData] = useState<GoalSummary[]>([]);
@@ -145,6 +172,21 @@ const GoalComparison = () => {
     totalPages: 0,
   });
 
+  // Variance Review state
+  const [varianceData, setVarianceData] = useState<VarianceTransaction[]>([]);
+  const [varianceSummary, setVarianceSummary] = useState<VarianceTransactionsSummary | null>(null);
+  const [variancePagination, setVariancePagination] = useState<Pagination>({
+    page: 1,
+    limit: 50,
+    total: 0,
+    totalPages: 0,
+  });
+  const [varianceReviewStatus, setVarianceReviewStatus] = useState<'PENDING' | 'REVIEWED' | 'ALL'>('REVIEWED');
+  const [varianceTagFilter, setVarianceTagFilter] = useState('');
+  const [reviewingTransaction, setReviewingTransaction] = useState<{id: string; type: 'BANK' | 'GOAL'} | null>(null);
+  const [selectedReviewTag, setSelectedReviewTag] = useState<VarianceReviewTag | ''>('');
+  const [reviewNotes, setReviewNotes] = useState('');
+
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -162,6 +204,18 @@ const GoalComparison = () => {
   const [expandedGoal, setExpandedGoal] = useState<string | null>(null);
   const [drilldownData, setDrilldownData] = useState<TransactionDrilldown | null>(null);
   const [drilldownLoading, setDrilldownLoading] = useState(false);
+
+  // Drill-down review editing state
+  const [drilldownReviewingTxn, setDrilldownReviewingTxn] = useState<{
+    id: string;
+    type: 'BANK' | 'GOAL';
+  } | null>(null);
+  const [drilldownReviewTag, setDrilldownReviewTag] = useState<VarianceReviewTag | ''>('');
+  const [drilldownReviewNotes, setDrilldownReviewNotes] = useState('');
+
+  // Batch tagging state - stores pending (unsaved) tags
+  const [pendingTags, setPendingTags] = useState<Map<string, { type: 'BANK' | 'GOAL'; tag: VarianceReviewTag; notes: string }>>(new Map());
+  const [savingTags, setSavingTags] = useState(false);
 
   // Smart matching batch processing state
   const [batchSize, setBatchSize] = useState(100);
@@ -181,11 +235,13 @@ const GoalComparison = () => {
     if (startDate && endDate) {
       if (activeTab === 'goal') {
         fetchData();
-      } else {
+      } else if (activeTab === 'fund') {
         fetchFundData();
+      } else if (activeTab === 'variance') {
+        fetchVarianceData();
       }
     }
-  }, [startDate, endDate, activeTab]);
+  }, [startDate, endDate, activeTab, varianceReviewStatus, varianceTagFilter]);
 
   const fetchData = async (page: number = 1) => {
     setLoading(true);
@@ -235,13 +291,155 @@ const GoalComparison = () => {
     }
   };
 
+  const fetchVarianceData = async (page: number = 1) => {
+    setLoading(true);
+    setError(null);
+    try {
+      const result = await fetchVarianceTransactions({
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+        goalNumber: goalNumber || undefined,
+        clientSearch: clientSearch || undefined,
+        reviewStatus: varianceReviewStatus !== 'ALL' ? varianceReviewStatus : undefined,
+        reviewTag: varianceTagFilter || undefined,
+        page,
+        limit: variancePagination.limit,
+      });
+      setVarianceData(result.data);
+      setVarianceSummary(result.summary);
+      setVariancePagination(result.pagination);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleReviewTransaction = async (id: string, type: 'BANK' | 'GOAL', tag: VarianceReviewTag, notes: string) => {
+    try {
+      if (type === 'BANK') {
+        await reviewBankTransaction(id, tag, notes || null, 'User'); // TODO: Get actual user
+      } else {
+        await reviewGoalTransaction(id, tag, notes || null, 'User');
+      }
+      // Refresh data
+      fetchVarianceData(variancePagination.page);
+      setReviewingTransaction(null);
+      setSelectedReviewTag('');
+      setReviewNotes('');
+    } catch (err) {
+      setError((err as Error).message);
+    }
+  };
+
+  // Add a tag to the pending queue (no API call - just local state)
+  const addPendingTag = (id: string, type: 'BANK' | 'GOAL', tag: VarianceReviewTag, notes: string) => {
+    setPendingTags(prev => {
+      const newMap = new Map(prev);
+      newMap.set(id, { type, tag, notes });
+      return newMap;
+    });
+    // Reset the editing state
+    setDrilldownReviewingTxn(null);
+    setDrilldownReviewTag('');
+    setDrilldownReviewNotes('');
+  };
+
+  // Remove a pending tag
+  const removePendingTag = (id: string) => {
+    setPendingTags(prev => {
+      const newMap = new Map(prev);
+      newMap.delete(id);
+      return newMap;
+    });
+  };
+
+  // Clear all pending tags
+  const clearPendingTags = () => {
+    setPendingTags(new Map());
+  };
+
+  // Save all pending tags at once, then refresh
+  const saveAllPendingTags = async () => {
+    if (pendingTags.size === 0) return;
+
+    setSavingTags(true);
+    try {
+      // Separate bank and goal transaction IDs
+      const bankIds: string[] = [];
+      const goalCodes: string[] = [];
+      let commonTag: VarianceReviewTag | null = null;
+      let commonNotes: string | null = null;
+
+      // Check if all pending tags have the same tag (for bulk API)
+      const tagsArray = Array.from(pendingTags.entries());
+      const firstTag = tagsArray[0]?.[1];
+      const allSameTag = tagsArray.every(([, val]) => val.tag === firstTag?.tag);
+
+      if (allSameTag && firstTag) {
+        // Use bulk API
+        for (const [id, { type }] of pendingTags) {
+          if (type === 'BANK') {
+            bankIds.push(id);
+          } else {
+            goalCodes.push(id);
+          }
+        }
+        commonTag = firstTag.tag;
+        commonNotes = firstTag.notes;
+
+        await bulkReviewTransactions({
+          bankTransactionIds: bankIds,
+          goalTransactionCodes: goalCodes,
+          reviewTag: commonTag,
+          reviewNotes: commonNotes || null,
+          reviewedBy: 'User',
+        });
+      } else {
+        // Different tags - save individually
+        for (const [id, { type, tag, notes }] of pendingTags) {
+          if (type === 'BANK') {
+            await reviewBankTransaction(id, tag, notes || null, 'User');
+          } else {
+            await reviewGoalTransaction(id, tag, notes || null, 'User');
+          }
+        }
+      }
+
+      // Clear pending tags
+      setPendingTags(new Map());
+
+      // Refresh drilldown data
+      if (expandedGoal) {
+        const result = await fetchGoalTransactionsWithMatching(expandedGoal, {
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+        });
+        setDrilldownData({
+          bankTransactions: result.bankTransactions,
+          goalTransactions: result.goalTransactions,
+          summary: result.summary,
+        });
+      }
+
+      // Refresh the main goal list to update the status
+      await fetchData(pagination.page);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setSavingTags(false);
+    }
+  };
+
   const handleApplyFilters = () => {
     setExpandedGoal(null);
     setDrilldownData(null);
     if (activeTab === 'goal') {
       fetchData(1);
-    } else {
+    } else if (activeTab === 'fund') {
       fetchFundData(1);
+    } else {
+      fetchVarianceData(1);
     }
   };
 
@@ -254,13 +452,17 @@ const GoalComparison = () => {
     setAccountNumber("");
     setClientSearch("");
     setStatus("ALL");
+    setVarianceReviewStatus('ALL');
+    setVarianceTagFilter('');
     setExpandedGoal(null);
     setDrilldownData(null);
     setTimeout(() => {
       if (activeTab === 'goal') {
         fetchData(1);
-      } else {
+      } else if (activeTab === 'fund') {
         fetchFundData(1);
+      } else {
+        fetchVarianceData(1);
       }
     }, 0);
   };
@@ -268,18 +470,33 @@ const GoalComparison = () => {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const exportParams = {
-        startDate: startDate || undefined,
-        endDate: endDate || undefined,
-        goalNumber: goalNumber || undefined,
-        accountNumber: accountNumber || undefined,
-        clientSearch: clientSearch || undefined,
-        status: status !== "ALL" ? status : undefined,
-      };
       if (activeTab === 'goal') {
-        await exportGoalComparisonCSV(exportParams);
+        await exportGoalComparisonCSV({
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+          goalNumber: goalNumber || undefined,
+          accountNumber: accountNumber || undefined,
+          clientSearch: clientSearch || undefined,
+          status: status !== "ALL" ? status : undefined,
+        });
+      } else if (activeTab === 'fund') {
+        await exportFundComparisonCSV({
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+          goalNumber: goalNumber || undefined,
+          accountNumber: accountNumber || undefined,
+          clientSearch: clientSearch || undefined,
+          status: status !== "ALL" ? status : undefined,
+        });
       } else {
-        await exportFundComparisonCSV(exportParams);
+        await exportVarianceTransactionsExcel({
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+          goalNumber: goalNumber || undefined,
+          clientSearch: clientSearch || undefined,
+          reviewStatus: varianceReviewStatus !== 'ALL' ? varianceReviewStatus : undefined,
+          reviewTag: varianceTagFilter || undefined,
+        });
       }
     } catch (err) {
       alert("Failed to export: " + (err as Error).message);
@@ -340,9 +557,12 @@ const GoalComparison = () => {
     if (expandedGoal === goalNum) {
       setExpandedGoal(null);
       setDrilldownData(null);
+      setPendingTags(new Map()); // Clear pending tags when collapsing
       return;
     }
 
+    // Clear pending tags when switching to a different goal
+    setPendingTags(new Map());
     setExpandedGoal(goalNum);
     setDrilldownLoading(true);
     try {
@@ -375,15 +595,15 @@ const GoalComparison = () => {
     });
   };
 
-  const getStatusIcon = (status: string) => {
-    switch (status) {
-      case "MATCHED":
-        return <CheckCircle2 className="h-5 w-5 text-green-600" />;
-      case "VARIANCE":
-        return <AlertTriangle className="h-5 w-5 text-orange-500" />;
-      default:
-        return <AlertCircle className="h-5 w-5 text-gray-400" />;
+  const getStatusIcon = (status: string, reviewStatus?: string) => {
+    if (status === "MATCHED") {
+      return <CheckCircle2 className="h-5 w-5 text-green-600" />;
     }
+    // For VARIANCE status, show icon based on review status
+    if (reviewStatus === "REVIEWED") {
+      return <CheckCircle2 className="h-5 w-5 text-blue-600" />;
+    }
+    return <AlertTriangle className="h-5 w-5 text-orange-500" />;
   };
 
   const getStatusBadge = (status: string) => {
@@ -394,20 +614,40 @@ const GoalComparison = () => {
     return badges[status] || "bg-gray-100 text-gray-800";
   };
 
+  const getReviewStatusBadge = (reviewStatus: string) => {
+    const badges: Record<string, string> = {
+      REVIEWED: "bg-blue-100 text-blue-800",
+      PARTIALLY_REVIEWED: "bg-yellow-100 text-yellow-800",
+      UNREVIEWED: "bg-red-100 text-red-800",
+      NOT_APPLICABLE: "",
+    };
+    return badges[reviewStatus] || "";
+  };
+
+  const getReviewStatusText = (reviewStatus: string) => {
+    const text: Record<string, string> = {
+      REVIEWED: "Reviewed",
+      PARTIALLY_REVIEWED: "Partial",
+      UNREVIEWED: "Pending",
+      NOT_APPLICABLE: "",
+    };
+    return text[reviewStatus] || "";
+  };
+
   const getVarianceClass = (diff: number) => {
     if (diff === 0) return "text-gray-500";
     return diff > 0 ? "text-red-600" : "text-green-600";
   };
 
-  const getRowBgClass = (status: string) => {
-    switch (status) {
-      case "MATCHED":
-        return "bg-green-50 hover:bg-green-100";
-      case "VARIANCE":
-        return "bg-orange-50 hover:bg-orange-100";
-      default:
-        return "hover:bg-gray-50";
+  const getRowBgClass = (status: string, reviewStatus?: string) => {
+    if (status === "MATCHED") {
+      return "bg-green-50 hover:bg-green-100";
     }
+    // For VARIANCE status, color based on review status
+    if (reviewStatus === "REVIEWED") {
+      return "bg-blue-50 hover:bg-blue-100";
+    }
+    return "bg-orange-50 hover:bg-orange-100";
   };
 
   const getMatchTypeBadge = (type: string) => {
@@ -455,6 +695,22 @@ const GoalComparison = () => {
           }`}
         >
           Fund Comparison
+        </button>
+        <button
+          onClick={() => setActiveTab('variance')}
+          className={`px-6 py-3 text-sm font-medium border-b-2 transition-colors flex items-center gap-2 ${
+            activeTab === 'variance'
+              ? 'border-orange-600 text-orange-600'
+              : 'border-transparent text-gray-500 hover:text-gray-700 hover:border-gray-300'
+          }`}
+        >
+          <Tag className="h-4 w-4" />
+          Variance Review
+          {varianceSummary && varianceSummary.pendingReview > 0 && (
+            <span className="bg-orange-100 text-orange-800 text-xs px-2 py-0.5 rounded-full">
+              {varianceSummary.pendingReview}
+            </span>
+          )}
         </button>
       </div>
 
@@ -635,6 +891,7 @@ const GoalComparison = () => {
               <option value="ALL">All</option>
               <option value="MATCHED">Matched</option>
               <option value="VARIANCE">Variance</option>
+              <option value="REVIEWED">Reviewed</option>
             </select>
           </div>
         </div>
@@ -741,7 +998,7 @@ const GoalComparison = () => {
                 {data.map((row) => (
                   <React.Fragment key={row.goalNumber}>
                     <tr
-                      className={`${getRowBgClass(row.status)} cursor-pointer transition-colors`}
+                      className={`${getRowBgClass(row.status, row.reviewStatus)} cursor-pointer transition-colors`}
                       onClick={() => handleGoalClick(row.goalNumber)}
                     >
                       <td className="px-3 py-3 text-center">
@@ -752,11 +1009,19 @@ const GoalComparison = () => {
                         )}
                       </td>
                       <td className="px-3 py-3">
-                        <div className="flex items-center justify-center gap-2">
-                          {getStatusIcon(row.status)}
-                          <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded ${getStatusBadge(row.status)}`}>
-                            {row.status}
-                          </span>
+                        <div className="flex items-center justify-center gap-1">
+                          {getStatusIcon(row.status, row.reviewStatus)}
+                          <div className="flex flex-col gap-0.5">
+                            <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded ${getStatusBadge(row.status)}`}>
+                              {row.status}
+                            </span>
+                            {row.status === "VARIANCE" && row.reviewStatus !== "NOT_APPLICABLE" && (
+                              <span className={`inline-block px-2 py-0.5 text-xs font-medium rounded ${getReviewStatusBadge(row.reviewStatus)}`}>
+                                {getReviewStatusText(row.reviewStatus)}
+                                {row.unreviewedCount > 0 && ` (${row.unreviewedCount})`}
+                              </span>
+                            )}
+                          </div>
                         </div>
                       </td>
                       <td className="px-4 py-3 text-sm font-mono">
@@ -853,7 +1118,8 @@ const GoalComparison = () => {
                                       <div
                                         key={txn.id}
                                         className={`border rounded p-2 text-sm ${
-                                          txn.isMatched ? "bg-green-50 border-green-200" : "bg-orange-50 border-orange-200"
+                                          txn.isMatched ? "bg-green-50 border-green-200" :
+                                          txn.reviewTag ? "bg-blue-50 border-blue-200" : "bg-orange-50 border-orange-200"
                                         }`}
                                       >
                                         <div className="flex justify-between items-center">
@@ -885,6 +1151,104 @@ const GoalComparison = () => {
                                             </span>
                                           </div>
                                         )}
+                                        {/* Review tagging for unmatched bank transactions */}
+                                        {!txn.isMatched && (
+                                          <div className="mt-2 pt-2 border-t border-gray-200">
+                                            {drilldownReviewingTxn?.id === txn.id && drilldownReviewingTxn?.type === 'BANK' ? (
+                                              <div className="space-y-2">
+                                                <select
+                                                  value={drilldownReviewTag}
+                                                  onChange={(e) => setDrilldownReviewTag(e.target.value as VarianceReviewTag)}
+                                                  className="w-full text-xs px-2 py-1 border border-gray-300 rounded"
+                                                >
+                                                  <option value="">Select tag...</option>
+                                                  {VARIANCE_REVIEW_TAGS.map((tag) => (
+                                                    <option key={tag.value} value={tag.value}>{tag.label}</option>
+                                                  ))}
+                                                </select>
+                                                <input
+                                                  type="text"
+                                                  value={drilldownReviewNotes}
+                                                  onChange={(e) => setDrilldownReviewNotes(e.target.value)}
+                                                  placeholder="Notes..."
+                                                  className="w-full text-xs px-2 py-1 border border-gray-300 rounded"
+                                                />
+                                                <div className="flex gap-1">
+                                                  <button
+                                                    onClick={() => {
+                                                      if (drilldownReviewTag) {
+                                                        addPendingTag(txn.id, 'BANK', drilldownReviewTag, drilldownReviewNotes);
+                                                      }
+                                                    }}
+                                                    disabled={!drilldownReviewTag}
+                                                    className="flex-1 text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                                                  >
+                                                    Add Tag
+                                                  </button>
+                                                  <button
+                                                    onClick={() => {
+                                                      setDrilldownReviewingTxn(null);
+                                                      setDrilldownReviewTag('');
+                                                      setDrilldownReviewNotes('');
+                                                    }}
+                                                    className="flex-1 text-xs px-2 py-1 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+                                                  >
+                                                    Cancel
+                                                  </button>
+                                                </div>
+                                              </div>
+                                            ) : pendingTags.has(txn.id) ? (
+                                              <div className="flex items-center justify-between">
+                                                <div>
+                                                  <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 border border-yellow-300">
+                                                    {VARIANCE_REVIEW_TAGS.find(t => t.value === pendingTags.get(txn.id)?.tag)?.label || pendingTags.get(txn.id)?.tag}
+                                                    <span className="ml-1 text-yellow-600">(pending)</span>
+                                                  </span>
+                                                </div>
+                                                <button
+                                                  onClick={() => removePendingTag(txn.id)}
+                                                  className="text-xs px-2 py-0.5 text-red-600 hover:bg-red-50 rounded"
+                                                >
+                                                  Remove
+                                                </button>
+                                              </div>
+                                            ) : txn.reviewTag ? (
+                                              <div className="flex items-center justify-between">
+                                                <div>
+                                                  <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-800">
+                                                    {VARIANCE_REVIEW_TAGS.find(t => t.value === txn.reviewTag)?.label || txn.reviewTag}
+                                                  </span>
+                                                  {txn.reviewNotes && (
+                                                    <span className="text-xs text-gray-500 ml-2" title={txn.reviewNotes}>
+                                                      "{txn.reviewNotes.substring(0, 20)}{txn.reviewNotes.length > 20 ? '...' : ''}"
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <button
+                                                  onClick={() => {
+                                                    setDrilldownReviewingTxn({ id: txn.id, type: 'BANK' });
+                                                    setDrilldownReviewTag(txn.reviewTag || '');
+                                                    setDrilldownReviewNotes(txn.reviewNotes || '');
+                                                  }}
+                                                  className="text-xs px-2 py-0.5 text-blue-600 hover:bg-blue-50 rounded"
+                                                >
+                                                  Edit
+                                                </button>
+                                              </div>
+                                            ) : (
+                                              <button
+                                                onClick={() => {
+                                                  setDrilldownReviewingTxn({ id: txn.id, type: 'BANK' });
+                                                  setDrilldownReviewTag('');
+                                                  setDrilldownReviewNotes('');
+                                                }}
+                                                className="w-full text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded hover:bg-orange-200"
+                                              >
+                                                Tag Variance
+                                              </button>
+                                            )}
+                                          </div>
+                                        )}
                                       </div>
                                     ))}
                                   </div>
@@ -898,7 +1262,8 @@ const GoalComparison = () => {
                                       <div
                                         key={txn.goalTransactionCode}
                                         className={`border rounded p-2 text-sm ${
-                                          txn.isMatched ? "bg-green-50 border-green-200" : "bg-orange-50 border-orange-200"
+                                          txn.isMatched ? "bg-green-50 border-green-200" :
+                                          txn.reviewTag ? "bg-blue-50 border-blue-200" : "bg-orange-50 border-orange-200"
                                         }`}
                                       >
                                         <div className="flex justify-between items-center">
@@ -929,11 +1294,140 @@ const GoalComparison = () => {
                                             </span>
                                           </div>
                                         )}
+                                        {/* Review tagging for unmatched goal transactions */}
+                                        {!txn.isMatched && (
+                                          <div className="mt-2 pt-2 border-t border-gray-200">
+                                            {drilldownReviewingTxn?.id === txn.goalTransactionCode && drilldownReviewingTxn?.type === 'GOAL' ? (
+                                              <div className="space-y-2">
+                                                <select
+                                                  value={drilldownReviewTag}
+                                                  onChange={(e) => setDrilldownReviewTag(e.target.value as VarianceReviewTag)}
+                                                  className="w-full text-xs px-2 py-1 border border-gray-300 rounded"
+                                                >
+                                                  <option value="">Select tag...</option>
+                                                  {VARIANCE_REVIEW_TAGS.map((tag) => (
+                                                    <option key={tag.value} value={tag.value}>{tag.label}</option>
+                                                  ))}
+                                                </select>
+                                                <input
+                                                  type="text"
+                                                  value={drilldownReviewNotes}
+                                                  onChange={(e) => setDrilldownReviewNotes(e.target.value)}
+                                                  placeholder="Notes..."
+                                                  className="w-full text-xs px-2 py-1 border border-gray-300 rounded"
+                                                />
+                                                <div className="flex gap-1">
+                                                  <button
+                                                    onClick={() => {
+                                                      if (drilldownReviewTag) {
+                                                        addPendingTag(txn.goalTransactionCode, 'GOAL', drilldownReviewTag, drilldownReviewNotes);
+                                                      }
+                                                    }}
+                                                    disabled={!drilldownReviewTag}
+                                                    className="flex-1 text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700 disabled:opacity-50"
+                                                  >
+                                                    Add Tag
+                                                  </button>
+                                                  <button
+                                                    onClick={() => {
+                                                      setDrilldownReviewingTxn(null);
+                                                      setDrilldownReviewTag('');
+                                                      setDrilldownReviewNotes('');
+                                                    }}
+                                                    className="flex-1 text-xs px-2 py-1 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+                                                  >
+                                                    Cancel
+                                                  </button>
+                                                </div>
+                                              </div>
+                                            ) : pendingTags.has(txn.goalTransactionCode) ? (
+                                              <div className="flex items-center justify-between">
+                                                <div>
+                                                  <span className="text-xs px-1.5 py-0.5 rounded bg-yellow-100 text-yellow-800 border border-yellow-300">
+                                                    {VARIANCE_REVIEW_TAGS.find(t => t.value === pendingTags.get(txn.goalTransactionCode)?.tag)?.label || pendingTags.get(txn.goalTransactionCode)?.tag}
+                                                    <span className="ml-1 text-yellow-600">(pending)</span>
+                                                  </span>
+                                                </div>
+                                                <button
+                                                  onClick={() => removePendingTag(txn.goalTransactionCode)}
+                                                  className="text-xs px-2 py-0.5 text-red-600 hover:bg-red-50 rounded"
+                                                >
+                                                  Remove
+                                                </button>
+                                              </div>
+                                            ) : txn.reviewTag ? (
+                                              <div className="flex items-center justify-between">
+                                                <div>
+                                                  <span className="text-xs px-1.5 py-0.5 rounded bg-blue-100 text-blue-800">
+                                                    {VARIANCE_REVIEW_TAGS.find(t => t.value === txn.reviewTag)?.label || txn.reviewTag}
+                                                  </span>
+                                                  {txn.reviewNotes && (
+                                                    <span className="text-xs text-gray-500 ml-2" title={txn.reviewNotes}>
+                                                      "{txn.reviewNotes.substring(0, 20)}{txn.reviewNotes.length > 20 ? '...' : ''}"
+                                                    </span>
+                                                  )}
+                                                </div>
+                                                <button
+                                                  onClick={() => {
+                                                    setDrilldownReviewingTxn({ id: txn.goalTransactionCode, type: 'GOAL' });
+                                                    setDrilldownReviewTag(txn.reviewTag || '');
+                                                    setDrilldownReviewNotes(txn.reviewNotes || '');
+                                                  }}
+                                                  className="text-xs px-2 py-0.5 text-blue-600 hover:bg-blue-50 rounded"
+                                                >
+                                                  Edit
+                                                </button>
+                                              </div>
+                                            ) : (
+                                              <button
+                                                onClick={() => {
+                                                  setDrilldownReviewingTxn({ id: txn.goalTransactionCode, type: 'GOAL' });
+                                                  setDrilldownReviewTag('');
+                                                  setDrilldownReviewNotes('');
+                                                }}
+                                                className="w-full text-xs px-2 py-1 bg-orange-100 text-orange-700 rounded hover:bg-orange-200"
+                                              >
+                                                Tag Variance
+                                              </button>
+                                            )}
+                                          </div>
+                                        )}
                                       </div>
                                     ))}
                                   </div>
                                 </div>
                               </div>
+
+                              {/* Save All & Refresh Button Bar */}
+                              {pendingTags.size > 0 && (
+                                <div className="mt-4 pt-4 border-t border-gray-300 flex items-center justify-between bg-yellow-50 -mx-4 px-4 py-3 rounded-b-lg">
+                                  <div className="text-sm text-yellow-800">
+                                    <span className="font-medium">{pendingTags.size}</span> pending tag{pendingTags.size !== 1 ? 's' : ''} to save
+                                  </div>
+                                  <div className="flex gap-2">
+                                    <button
+                                      onClick={clearPendingTags}
+                                      disabled={savingTags}
+                                      className="inline-flex items-center px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50"
+                                    >
+                                      <X className="h-4 w-4 mr-1" />
+                                      Clear All
+                                    </button>
+                                    <button
+                                      onClick={saveAllPendingTags}
+                                      disabled={savingTags}
+                                      className="inline-flex items-center px-4 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                                    >
+                                      {savingTags ? (
+                                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                      ) : (
+                                        <Save className="h-4 w-4 mr-1" />
+                                      )}
+                                      Save All & Refresh
+                                    </button>
+                                  </div>
+                                </div>
+                              )}
                             </div>
                           ) : (
                             <p className="text-gray-500 text-center py-4">No transaction data available</p>
@@ -1251,6 +1745,258 @@ const GoalComparison = () => {
             Try adjusting your date range or upload transactions first
           </p>
         </div>
+      )}
+
+      {/* Variance Review Tab Content */}
+      {activeTab === 'variance' && (
+        <>
+          {/* Variance Summary Cards */}
+          {varianceSummary && (
+            <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
+              <div className="bg-white border border-gray-200 rounded-lg p-4">
+                <p className="text-sm text-gray-600">Total Unmatched</p>
+                <p className="text-2xl font-bold text-gray-900">
+                  {varianceSummary.totalUnmatched.toLocaleString()}
+                </p>
+              </div>
+              <div className="bg-white border border-orange-200 rounded-lg p-4">
+                <p className="text-sm text-gray-600">Pending Review</p>
+                <p className="text-2xl font-bold text-orange-600">
+                  {varianceSummary.pendingReview.toLocaleString()}
+                </p>
+              </div>
+              <div className="bg-white border border-green-200 rounded-lg p-4">
+                <p className="text-sm text-gray-600">Reviewed</p>
+                <p className="text-2xl font-bold text-green-600">
+                  {varianceSummary.reviewed.toLocaleString()}
+                </p>
+              </div>
+              <div className="bg-white border border-blue-200 rounded-lg p-4">
+                <p className="text-sm text-gray-600">Review Progress</p>
+                <p className="text-2xl font-bold text-blue-600">
+                  {varianceSummary.totalUnmatched > 0
+                    ? Math.round((varianceSummary.reviewed / varianceSummary.totalUnmatched) * 100)
+                    : 0}%
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* Variance Filters */}
+          <div className="bg-white border border-gray-200 rounded-lg p-4 mb-6">
+            <div className="flex flex-wrap gap-4 items-end">
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Review Status</label>
+                <select
+                  value={varianceReviewStatus}
+                  onChange={(e) => setVarianceReviewStatus(e.target.value as 'PENDING' | 'REVIEWED' | 'ALL')}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="ALL">All</option>
+                  <option value="PENDING">Pending Review</option>
+                  <option value="REVIEWED">Reviewed</option>
+                </select>
+              </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Review Tag</label>
+                <select
+                  value={varianceTagFilter}
+                  onChange={(e) => setVarianceTagFilter(e.target.value)}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="">All Tags</option>
+                  {VARIANCE_REVIEW_TAGS.map((tag) => (
+                    <option key={tag.value} value={tag.value}>
+                      {tag.label}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <button
+                onClick={handleExport}
+                disabled={exporting || varianceData.length === 0}
+                className="flex items-center gap-2 px-4 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+              >
+                {exporting ? <Loader2 className="h-4 w-4 animate-spin" /> : <FileSpreadsheet className="h-4 w-4" />}
+                Export Excel
+              </button>
+            </div>
+          </div>
+
+          {/* Variance Transactions Table */}
+          {!loading && varianceData.length > 0 && (
+            <div className="bg-white border border-gray-200 rounded-lg overflow-hidden">
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Source</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Goal</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Client</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Date</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Type</th>
+                      <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Review Tag</th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Notes</th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Action</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-200">
+                    {varianceData.map((txn) => (
+                      <tr key={`${txn.transactionSource}-${txn.id}`} className="hover:bg-gray-50">
+                        <td className="px-4 py-3">
+                          <span className={`text-xs px-2 py-1 rounded ${
+                            txn.transactionSource === 'BANK'
+                              ? 'bg-blue-100 text-blue-800'
+                              : 'bg-purple-100 text-purple-800'
+                          }`}>
+                            {txn.transactionSource}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-sm font-mono">{txn.goalNumber}</td>
+                        <td className="px-4 py-3 text-sm max-w-[150px] truncate" title={txn.clientName}>
+                          {txn.clientName}
+                        </td>
+                        <td className="px-4 py-3 text-sm">{formatDate(txn.transactionDate)}</td>
+                        <td className="px-4 py-3">
+                          <span className={`text-xs px-2 py-1 rounded ${
+                            txn.transactionType === 'DEPOSIT'
+                              ? 'bg-green-100 text-green-800'
+                              : 'bg-red-100 text-red-800'
+                          }`}>
+                            {txn.transactionType}
+                          </span>
+                        </td>
+                        <td className="px-4 py-3 text-sm text-right font-medium">
+                          {formatCurrency(txn.amount)}
+                        </td>
+                        <td className="px-4 py-3">
+                          {reviewingTransaction?.id === txn.id ? (
+                            <select
+                              value={selectedReviewTag}
+                              onChange={(e) => setSelectedReviewTag(e.target.value as VarianceReviewTag)}
+                              className="text-xs px-2 py-1 border border-gray-300 rounded"
+                              autoFocus
+                            >
+                              <option value="">Select tag...</option>
+                              {VARIANCE_REVIEW_TAGS.map((tag) => (
+                                <option key={tag.value} value={tag.value}>
+                                  {tag.label}
+                                </option>
+                              ))}
+                            </select>
+                          ) : txn.reviewTag ? (
+                            <span className="text-xs px-2 py-1 rounded bg-gray-100 text-gray-700">
+                              {VARIANCE_REVIEW_TAGS.find(t => t.value === txn.reviewTag)?.label || txn.reviewTag}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400 italic">Not reviewed</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3">
+                          {reviewingTransaction?.id === txn.id ? (
+                            <input
+                              type="text"
+                              value={reviewNotes}
+                              onChange={(e) => setReviewNotes(e.target.value)}
+                              placeholder="Add notes..."
+                              className="text-xs px-2 py-1 border border-gray-300 rounded w-full"
+                            />
+                          ) : txn.reviewNotes ? (
+                            <span className="text-xs text-gray-600 max-w-[150px] truncate block" title={txn.reviewNotes}>
+                              {txn.reviewNotes}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400">-</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {reviewingTransaction?.id === txn.id ? (
+                            <div className="flex items-center justify-center gap-1">
+                              <button
+                                onClick={() => {
+                                  if (selectedReviewTag) {
+                                    handleReviewTransaction(txn.id, txn.transactionSource, selectedReviewTag, reviewNotes);
+                                  }
+                                }}
+                                disabled={!selectedReviewTag}
+                                className="text-xs px-2 py-1 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
+                              >
+                                Save
+                              </button>
+                              <button
+                                onClick={() => {
+                                  setReviewingTransaction(null);
+                                  setSelectedReviewTag('');
+                                  setReviewNotes('');
+                                }}
+                                className="text-xs px-2 py-1 bg-gray-300 text-gray-700 rounded hover:bg-gray-400"
+                              >
+                                Cancel
+                              </button>
+                            </div>
+                          ) : (
+                            <button
+                              onClick={() => {
+                                setReviewingTransaction({ id: txn.id, type: txn.transactionSource });
+                                setSelectedReviewTag(txn.reviewTag || '');
+                                setReviewNotes(txn.reviewNotes || '');
+                              }}
+                              className="text-xs px-2 py-1 bg-blue-600 text-white rounded hover:bg-blue-700"
+                            >
+                              {txn.reviewTag ? 'Edit' : 'Review'}
+                            </button>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+
+              {/* Variance Pagination */}
+              {variancePagination.totalPages > 1 && (
+                <div className="px-4 py-3 border-t border-gray-200 flex items-center justify-between">
+                  <p className="text-sm text-gray-700">
+                    Showing {((variancePagination.page - 1) * variancePagination.limit) + 1} to{" "}
+                    {Math.min(variancePagination.page * variancePagination.limit, variancePagination.total)} of{" "}
+                    {variancePagination.total} transactions
+                  </p>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => fetchVarianceData(variancePagination.page - 1)}
+                      disabled={variancePagination.page === 1}
+                      className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      <ChevronLeft className="h-4 w-4" />
+                    </button>
+                    <span className="text-sm text-gray-700">
+                      Page {variancePagination.page} of {variancePagination.totalPages}
+                    </span>
+                    <button
+                      onClick={() => fetchVarianceData(variancePagination.page + 1)}
+                      disabled={variancePagination.page === variancePagination.totalPages}
+                      className="p-2 rounded-lg border border-gray-300 hover:bg-gray-50 disabled:opacity-50"
+                    >
+                      <ChevronRight className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Empty State - Variance Tab */}
+          {!loading && varianceData.length === 0 && (
+            <div className="text-center py-12 bg-gray-50 rounded-lg">
+              <CheckCircle2 className="h-16 w-16 text-green-400 mx-auto mb-4" />
+              <p className="text-gray-600 text-lg">No variance transactions found</p>
+              <p className="text-gray-500 text-sm mt-2">
+                All transactions are matched or no transactions in the selected date range
+              </p>
+            </div>
+          )}
+        </>
       )}
 
       {/* Info Box */}

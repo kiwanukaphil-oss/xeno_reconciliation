@@ -714,3 +714,188 @@ export const exportFundComparisonCSV = async (params: {
   document.body.removeChild(a);
   window.URL.revokeObjectURL(url);
 };
+
+// ============================================================================
+// VARIANCE REVIEW API
+// ============================================================================
+
+export const VARIANCE_REVIEW_TAGS = [
+  { value: 'DUPLICATE_TRANSACTION', label: 'Duplicate Transaction' },
+  { value: 'NO_ACTION_NEEDED', label: 'No Action Needed' },
+  { value: 'MISSING_IN_BANK', label: 'Missing in Bank' },
+  { value: 'MISSING_IN_GOAL', label: 'Missing in Goal' },
+  { value: 'TIMING_DIFFERENCE', label: 'Timing Difference' },
+  { value: 'AMOUNT_DISCREPANCY', label: 'Amount Discrepancy' },
+  { value: 'DATA_ENTRY_ERROR', label: 'Data Entry Error' },
+  { value: 'UNDER_INVESTIGATION', label: 'Under Investigation' },
+] as const;
+
+export type VarianceReviewTag = typeof VARIANCE_REVIEW_TAGS[number]['value'];
+
+export interface VarianceTransaction {
+  transactionSource: 'BANK' | 'GOAL';
+  id: string;
+  goalNumber: string;
+  clientName: string;
+  accountNumber: string;
+  transactionDate: string;
+  transactionType: string;
+  amount: number;
+  fundCode: string | null;
+  sourceTransactionId: string | null;
+  reviewTag: VarianceReviewTag | null;
+  reviewNotes: string | null;
+  reviewedBy: string | null;
+  reviewedAt: string | null;
+}
+
+export interface VarianceTransactionsSummary {
+  totalUnmatched: number;
+  pendingReview: number;
+  reviewed: number;
+  byTag: Record<string, number>;
+}
+
+export interface VarianceTransactionsResponse {
+  success: boolean;
+  data: VarianceTransaction[];
+  summary: VarianceTransactionsSummary;
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+  dateRange: {
+    startDate: string;
+    endDate: string;
+  };
+}
+
+export interface GoalReviewStatus {
+  goalNumber: string;
+  status: 'PENDING' | 'PARTIALLY_REVIEWED' | 'FULLY_REVIEWED' | 'NO_VARIANCES';
+  totalUnmatched: number;
+  reviewedCount: number;
+  pendingCount: number;
+  byTag: Record<string, number>;
+}
+
+export const reviewBankTransaction = async (
+  transactionId: string,
+  reviewTag: VarianceReviewTag,
+  reviewNotes: string | null,
+  reviewedBy: string
+): Promise<{ success: boolean; transaction: unknown }> => {
+  const response = await fetch(
+    `${API_URL}/api/goal-comparison/bank-transactions/${transactionId}/review`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewTag, reviewNotes, reviewedBy }),
+    }
+  );
+  return handleResponse(response);
+};
+
+export const reviewGoalTransaction = async (
+  goalTransactionCode: string,
+  reviewTag: VarianceReviewTag,
+  reviewNotes: string | null,
+  reviewedBy: string
+): Promise<{ success: boolean; updatedCount: number }> => {
+  const response = await fetch(
+    `${API_URL}/api/goal-comparison/goal-transactions/${encodeURIComponent(goalTransactionCode)}/review`,
+    {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ reviewTag, reviewNotes, reviewedBy }),
+    }
+  );
+  return handleResponse(response);
+};
+
+export const bulkReviewTransactions = async (params: {
+  bankTransactionIds?: string[];
+  goalTransactionCodes?: string[];
+  reviewTag: VarianceReviewTag;
+  reviewNotes: string | null;
+  reviewedBy: string;
+}): Promise<{ success: boolean; updated: { bank: number; goal: number } }> => {
+  const response = await fetch(`${API_URL}/api/goal-comparison/review/bulk`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  return handleResponse(response);
+};
+
+export const fetchGoalReviewStatus = async (
+  goalNumber: string,
+  startDate?: string,
+  endDate?: string
+): Promise<GoalReviewStatus> => {
+  const queryParams = new URLSearchParams();
+  if (startDate) queryParams.append("startDate", startDate);
+  if (endDate) queryParams.append("endDate", endDate);
+
+  const response = await fetch(
+    `${API_URL}/api/goal-comparison/${encodeURIComponent(goalNumber)}/review-status?${queryParams}`
+  );
+  return handleResponse(response);
+};
+
+export const fetchVarianceTransactions = async (params: {
+  startDate?: string;
+  endDate?: string;
+  reviewStatus?: 'PENDING' | 'REVIEWED' | 'ALL';
+  reviewTag?: string;
+  goalNumber?: string;
+  clientSearch?: string;
+  page?: number;
+  limit?: number;
+}): Promise<VarianceTransactionsResponse> => {
+  const queryParams = new URLSearchParams();
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.reviewStatus) queryParams.append("reviewStatus", params.reviewStatus);
+  if (params.reviewTag) queryParams.append("reviewTag", params.reviewTag);
+  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
+  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.page) queryParams.append("page", params.page.toString());
+  if (params.limit) queryParams.append("limit", params.limit.toString());
+
+  const response = await fetch(`${API_URL}/api/goal-comparison/variance-transactions?${queryParams}`);
+  return handleResponse(response);
+};
+
+export const exportVarianceTransactionsExcel = async (params: {
+  startDate?: string;
+  endDate?: string;
+  reviewStatus?: 'PENDING' | 'REVIEWED' | 'ALL';
+  reviewTag?: string;
+  goalNumber?: string;
+  clientSearch?: string;
+}) => {
+  const queryParams = new URLSearchParams();
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.reviewStatus) queryParams.append("reviewStatus", params.reviewStatus);
+  if (params.reviewTag) queryParams.append("reviewTag", params.reviewTag);
+  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
+  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+
+  const response = await fetch(`${API_URL}/api/goal-comparison/variance-transactions/export?${queryParams}`);
+  if (!response.ok) {
+    throw new Error("Failed to export variance transactions");
+  }
+  const blob = await response.blob();
+  const url = window.URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = `variance_review_${params.startDate || 'all'}_to_${params.endDate || 'all'}.xlsx`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  window.URL.revokeObjectURL(url);
+};
