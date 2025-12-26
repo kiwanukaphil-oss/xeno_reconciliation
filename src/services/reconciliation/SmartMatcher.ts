@@ -1639,6 +1639,13 @@ export class SmartMatcher {
     // Determine opposite transaction type
     const oppositeType = sourceTransaction.transactionType === 'DEPOSIT' ? 'WITHDRAWAL' : 'DEPOSIT';
 
+    // Calculate the negated amount for matching
+    // Deposits are positive, withdrawals are negative
+    // If source is DEPOSIT of 2,275,000 → look for WITHDRAWAL of -2,275,000
+    // If source is WITHDRAWAL of -2,275,000 → look for DEPOSIT of 2,275,000
+    const sourceAmount = Number(sourceTransaction.totalAmount);
+    const targetAmount = -sourceAmount; // Negate to find opposite
+
     // Build date range filter
     let dateFilter: any = {};
     if (dateRange) {
@@ -1650,13 +1657,13 @@ export class SmartMatcher {
       };
     }
 
-    // Find candidates: same goal, same absolute amount, opposite type, unmatched (in variance)
+    // Find candidates: same goal, negated amount (opposite sign), opposite type, unmatched (in variance)
     const candidates = await prisma.bankGoalTransaction.findMany({
       where: {
         id: { not: transactionId }, // Not the same transaction
         goalNumber: sourceTransaction.goalNumber,
         transactionType: oppositeType,
-        totalAmount: sourceTransaction.totalAmount, // Same absolute amount
+        totalAmount: targetAmount, // Negated amount (e.g., if source is 2,275,000 DEPOSIT, find -2,275,000 WITHDRAWAL)
         // Only consider unmatched transactions (those in variance)
         matchedGoalTransactionCode: null,
         // Exclude already linked reversals
@@ -1677,8 +1684,10 @@ export class SmartMatcher {
 
     logger.info('Found reversal candidates', {
       sourceTransactionId: transactionId,
-      sourceAmount: Number(sourceTransaction.totalAmount),
+      sourceAmount: sourceAmount,
+      targetAmount: targetAmount,
       sourceType: sourceTransaction.transactionType,
+      oppositeType: oppositeType,
       sourceGoal: sourceTransaction.goalNumber,
       candidateCount: candidates.length,
     });

@@ -541,6 +541,8 @@ const GoalComparison = () => {
   };
 
   // Find reversal candidates for a transaction
+  // NOTE: We don't pass the date range filter here because reversals can happen much later
+  // (e.g., January deposit reversed in May). Search all unmatched transactions.
   const handleFindReversals = async (txn: {id: string; amount: number; transactionType: string}) => {
     setReversalSearchTxn(txn);
     setReversalLoading(true);
@@ -548,8 +550,8 @@ const GoalComparison = () => {
     setReversalCandidates([]);
 
     try {
-      const dateRange = startDate && endDate ? { startDate, endDate } : undefined;
-      const result = await findReversalCandidates(txn.id, dateRange);
+      // No date range - search all unmatched transactions for potential reversals
+      const result = await findReversalCandidates(txn.id);
       setReversalCandidates(result.candidates || []);
     } catch (err) {
       setError((err as Error).message);
