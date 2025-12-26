@@ -830,6 +830,39 @@ export const bulkReviewTransactions = async (params: {
   return handleResponse(response);
 };
 
+// Manual matching - link bank transactions to goal transactions
+export const createManualMatch = async (params: {
+  bankTransactionIds: string[];
+  goalTransactionCodes: string[];
+  matchedBy: string;
+}): Promise<{
+  success: boolean;
+  matchedBankCount: number;
+  matchedGoalCount: number;
+  bankTotal: number;
+  goalTotal: number;
+}> => {
+  const response = await fetch(`${API_URL}/api/goal-comparison/manual-match`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  return handleResponse(response);
+};
+
+// Unmatch - remove a manual match
+export const removeManualMatch = async (params: {
+  bankTransactionIds?: string[];
+  goalTransactionCodes?: string[];
+}): Promise<{ success: boolean; unmatched: number }> => {
+  const response = await fetch(`${API_URL}/api/goal-comparison/manual-match`, {
+    method: 'DELETE',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params),
+  });
+  return handleResponse(response);
+};
+
 export const fetchGoalReviewStatus = async (
   goalNumber: string,
   startDate?: string,

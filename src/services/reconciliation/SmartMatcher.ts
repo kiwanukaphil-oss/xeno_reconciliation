@@ -1,4 +1,5 @@
 import { PrismaClient, ReconciliationStatus } from '@prisma/client';
+import { logger } from '../../config/logger';
 
 const prisma = new PrismaClient();
 
@@ -10,7 +11,7 @@ const DATE_WINDOW_DAYS = 30;
 interface MatchResult {
   bankIds: string[];
   fundIds: string[];
-  matchType: 'EXACT' | 'AMOUNT' | 'SPLIT_BANK_TO_FUND' | 'SPLIT_FUND_TO_BANK';
+  matchType: 'EXACT' | 'AMOUNT' | 'SPLIT_BANK_TO_FUND' | 'SPLIT_FUND_TO_BANK' | 'MANUAL';
   confidence: number;
   bankTotal: number;
   fundTotal: number;
@@ -152,6 +153,7 @@ export class SmartMatcher {
           COUNT(*) as txn_count
         FROM bank_goal_transactions b
         WHERE b."transactionDate"::date >= $1::date AND b."transactionDate"::date <= $2::date
+          AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
         GROUP BY b."goalNumber", b."transactionType"
       ),
       goal_txn_summary AS (
@@ -175,6 +177,7 @@ export class SmartMatcher {
           COUNT(*) FILTER (WHERE b."reviewTag" IS NOT NULL) as reviewed_count
         FROM bank_goal_transactions b
         WHERE b."transactionDate"::date >= $1::date AND b."transactionDate"::date <= $2::date
+          AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
           AND NOT EXISTS (
             SELECT 1 FROM fund_transactions f
             JOIN goals g ON f."goalId" = g."id"
@@ -203,6 +206,7 @@ export class SmartMatcher {
               AND b."transactionId" = f."transactionId"
               AND b."transactionType" = f."transactionType"
               AND b."transactionDate"::date >= $1::date AND b."transactionDate"::date <= $2::date
+              AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
           )
         GROUP BY g."goalNumber"
       ),
@@ -383,6 +387,7 @@ export class SmartMatcher {
           SUM(b."totalAmount") as total
         FROM bank_goal_transactions b
         WHERE b."transactionDate"::date >= $1::date AND b."transactionDate"::date <= $2::date
+          AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
         GROUP BY b."goalNumber"
       ),
       goal_fund_summary AS (
@@ -505,11 +510,13 @@ export class SmartMatcher {
     unmatchedGoalTxn: string[];
   }> {
     // Get bank transactions for this goal
+    // Exclude Transfer_Reversal transactions (transactionId contains "Transfer_Reversal")
     const bankTxns = await prisma.bankGoalTransaction.findMany({
       where: {
         goalNumber,
         transactionDate: { gte: startDate, lte: endDate },
         ...(transactionType && { transactionType }),
+        NOT: { transactionId: { contains: 'Transfer_Reversal' } },
       },
       orderBy: { transactionDate: 'desc' },
     });
@@ -602,6 +609,61 @@ export class SmartMatcher {
     const matches: MatchResult[] = [];
     const matchedBankIds = new Set<string>();
     const matchedFundIds = new Set<string>();
+
+    // PASS 0: Check for existing MANUAL matches (matchedGoalTransactionCode starts with MANUAL:)
+    // First, group bank transactions by their MANUAL: matchCode
+    const manualMatchGroups = new Map<string, typeof bankTxns>();
+    for (const bankTxn of bankTxns) {
+      if (!bankTxn.matchedGoalTransactionCode) continue;
+      if (!bankTxn.matchedGoalTransactionCode.startsWith('MANUAL:')) continue;
+
+      const matchCode = bankTxn.matchedGoalTransactionCode;
+      if (!manualMatchGroups.has(matchCode)) {
+        manualMatchGroups.set(matchCode, []);
+      }
+      manualMatchGroups.get(matchCode)!.push(bankTxn);
+    }
+
+    // Process each MANUAL match group together
+    for (const [matchCode, bankGroup] of manualMatchGroups) {
+      if (bankGroup.every(b => matchedBankIds.has(b.id))) continue;
+
+      // Extract goal transaction codes from the MANUAL match code
+      // Format: MANUAL:{timestamp}:{goalTransactionCode1},{goalTransactionCode2},...
+      const colonIndex = matchCode.indexOf(':', 7); // After "MANUAL:"
+      if (colonIndex === -1) continue;
+
+      const goalCodesStr = matchCode.substring(colonIndex + 1);
+      const goalCodes = goalCodesStr.split(',');
+
+      // Find all matching goal transactions
+      const allFundIds: string[] = [];
+      let fundTotal = 0;
+      for (const goalCode of goalCodes) {
+        if (goalTxnByCode.has(goalCode)) {
+          const fundGroup = goalTxnByCode.get(goalCode)!;
+          if (!fundGroup.ids.some(id => matchedFundIds.has(id))) {
+            allFundIds.push(...fundGroup.ids);
+            fundTotal += fundGroup.total;
+          }
+        }
+      }
+
+      if (allFundIds.length > 0) {
+        const unmatchedBanks = bankGroup.filter(b => !matchedBankIds.has(b.id));
+        const bankTotal = unmatchedBanks.reduce((sum, b) => sum + Number(b.totalAmount), 0);
+        matches.push({
+          bankIds: unmatchedBanks.map(b => b.id),
+          fundIds: allFundIds,
+          matchType: 'MANUAL',
+          confidence: 1.0,
+          bankTotal,
+          fundTotal,
+        });
+        unmatchedBanks.forEach(b => matchedBankIds.add(b.id));
+        allFundIds.forEach(id => matchedFundIds.add(id));
+      }
+    }
 
     // PASS 1: Exact match by transactionId
     for (const bankTxn of bankTxns) {
@@ -1023,6 +1085,7 @@ export class SmartMatcher {
       WHERE b."goalNumber" = $1
         AND b."transactionDate"::date >= $2::date
         AND b."transactionDate"::date <= $3::date
+        AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
         AND f.id IS NULL
     `;
     const unmatchedBank = await prisma.$queryRawUnsafe(bankQuery, goalNumber, startDate, endDate) as any[];
@@ -1160,6 +1223,7 @@ export class SmartMatcher {
         WHERE b."transactionDate"::date >= $1::date
           AND b."transactionDate"::date <= $2::date
           AND b."matchedGoalTransactionCode" IS NULL
+          AND (b."transactionId" IS NULL OR b."transactionId" NOT LIKE '%Transfer_Reversal%')
       ),
       unmatched_goal AS (
         SELECT
@@ -1236,6 +1300,151 @@ export class SmartMatcher {
         byTag,
       },
     };
+  }
+
+  /**
+   * Create a manual match between bank and goal transactions
+   * Links selected bank transactions to selected goal transactions
+   */
+  static async createManualMatch(
+    bankTransactionIds: string[],
+    goalTransactionCodes: string[],
+    matchedBy: string
+  ): Promise<{
+    matchedBankCount: number;
+    matchedGoalCount: number;
+    bankTotal: number;
+    goalTotal: number;
+  }> {
+    // Get bank transactions
+    const bankTxns = await prisma.bankGoalTransaction.findMany({
+      where: { id: { in: bankTransactionIds } },
+    });
+
+    if (bankTxns.length !== bankTransactionIds.length) {
+      throw new Error(`Some bank transactions not found. Expected ${bankTransactionIds.length}, found ${bankTxns.length}`);
+    }
+
+    // Get goal transactions (fund transactions grouped by goalTransactionCode)
+    const fundTxns = await prisma.fundTransaction.findMany({
+      where: { goalTransactionCode: { in: goalTransactionCodes } },
+    });
+
+    // Group fund transactions by goalTransactionCode
+    const goalTxnMap = new Map<string, number>();
+    for (const ft of fundTxns) {
+      const code = ft.goalTransactionCode;
+      if (code) {
+        goalTxnMap.set(code, (goalTxnMap.get(code) || 0) + Number(ft.amount));
+      }
+    }
+
+    if (goalTxnMap.size !== goalTransactionCodes.length) {
+      throw new Error(`Some goal transactions not found. Expected ${goalTransactionCodes.length}, found ${goalTxnMap.size}`);
+    }
+
+    // Calculate totals
+    const bankTotal = bankTxns.reduce((sum, t) => sum + Number(t.totalAmount), 0);
+    const goalTotal = Array.from(goalTxnMap.values()).reduce((sum, amt) => sum + amt, 0);
+
+    // Validate totals match within 1% tolerance
+    const tolerance = Math.max(bankTotal * 0.01, 1); // 1% or 1 UGX minimum
+    if (Math.abs(bankTotal - goalTotal) > tolerance) {
+      throw new Error(
+        `Totals do not match within tolerance. Bank: ${bankTotal.toLocaleString()}, Goal: ${goalTotal.toLocaleString()}, Difference: ${Math.abs(bankTotal - goalTotal).toLocaleString()}`
+      );
+    }
+
+    // Create a match code for manual matches
+    // Format: MANUAL:{timestamp}:{goalTransactionCode1},{goalTransactionCode2},...
+    // Always use MANUAL: prefix to distinguish from algorithmic matches
+    const matchCode = `MANUAL:${Date.now()}:${goalTransactionCodes.join(',')}`;
+
+    // Update bank transactions with the match
+    await prisma.bankGoalTransaction.updateMany({
+      where: { id: { in: bankTransactionIds } },
+      data: {
+        matchedGoalTransactionCode: matchCode,
+        updatedAt: new Date(),
+      },
+    });
+
+    logger.info('Created manual match', {
+      bankTransactionIds,
+      goalTransactionCodes,
+      matchCode,
+      bankTotal,
+      goalTotal,
+      matchedBy,
+    });
+
+    return {
+      matchedBankCount: bankTxns.length,
+      matchedGoalCount: goalTransactionCodes.length,
+      bankTotal,
+      goalTotal,
+    };
+  }
+
+  /**
+   * Remove a manual match
+   * Unlinks bank transactions from their matched goal transactions
+   */
+  static async removeManualMatch(
+    bankTransactionIds: string[],
+    goalTransactionCodes: string[]
+  ): Promise<number> {
+    let unmatched = 0;
+
+    // Unmatch by bank transaction IDs
+    if (bankTransactionIds.length > 0) {
+      const result = await prisma.bankGoalTransaction.updateMany({
+        where: { id: { in: bankTransactionIds } },
+        data: {
+          matchedGoalTransactionCode: null,
+          updatedAt: new Date(),
+        },
+      });
+      unmatched += result.count;
+    }
+
+    // Unmatch by goal transaction codes
+    // For MANUAL: format, the matchedGoalTransactionCode contains the goal codes after MANUAL:{timestamp}:
+    // So we search for codes that contain any of the provided goalTransactionCodes
+    if (goalTransactionCodes.length > 0) {
+      // First, try exact match (for old format or plain goalTransactionCode)
+      const exactResult = await prisma.bankGoalTransaction.updateMany({
+        where: { matchedGoalTransactionCode: { in: goalTransactionCodes } },
+        data: {
+          matchedGoalTransactionCode: null,
+          updatedAt: new Date(),
+        },
+      });
+      unmatched += exactResult.count;
+
+      // Also search for MANUAL: prefixed codes containing these goal codes
+      for (const goalCode of goalTransactionCodes) {
+        const containsResult = await prisma.bankGoalTransaction.updateMany({
+          where: {
+            matchedGoalTransactionCode: { contains: goalCode },
+            AND: { matchedGoalTransactionCode: { startsWith: 'MANUAL:' } },
+          },
+          data: {
+            matchedGoalTransactionCode: null,
+            updatedAt: new Date(),
+          },
+        });
+        unmatched += containsResult.count;
+      }
+    }
+
+    logger.info('Removed manual match', {
+      bankTransactionIds,
+      goalTransactionCodes,
+      unmatched,
+    });
+
+    return unmatched;
   }
 }
 

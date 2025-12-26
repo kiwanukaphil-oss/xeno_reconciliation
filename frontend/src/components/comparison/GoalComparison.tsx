@@ -18,6 +18,7 @@ import {
   Tag,
   FileSpreadsheet,
   Save,
+  Link2,
 } from "lucide-react";
 import {
   fetchGoalComparison,
@@ -31,6 +32,7 @@ import {
   reviewBankTransaction,
   reviewGoalTransaction,
   bulkReviewTransactions,
+  createManualMatch,
   VARIANCE_REVIEW_TAGS,
 } from "../../services/api";
 import type {
@@ -216,6 +218,11 @@ const GoalComparison = () => {
   // Batch tagging state - stores pending (unsaved) tags
   const [pendingTags, setPendingTags] = useState<Map<string, { type: 'BANK' | 'GOAL'; tag: VarianceReviewTag; notes: string }>>(new Map());
   const [savingTags, setSavingTags] = useState(false);
+
+  // Manual matching state - for selecting transactions to match
+  const [selectedBankIds, setSelectedBankIds] = useState<Set<string>>(new Set());
+  const [selectedGoalCodes, setSelectedGoalCodes] = useState<Set<string>>(new Set());
+  const [manualMatching, setManualMatching] = useState(false);
 
   // Smart matching batch processing state
   const [batchSize, setBatchSize] = useState(100);
@@ -431,6 +438,98 @@ const GoalComparison = () => {
     }
   };
 
+  // Manual matching helper functions
+  const toggleBankSelection = (id: string) => {
+    setSelectedBankIds(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(id)) {
+        newSet.delete(id);
+      } else {
+        newSet.add(id);
+      }
+      return newSet;
+    });
+  };
+
+  const toggleGoalSelection = (code: string) => {
+    setSelectedGoalCodes(prev => {
+      const newSet = new Set(prev);
+      if (newSet.has(code)) {
+        newSet.delete(code);
+      } else {
+        newSet.add(code);
+      }
+      return newSet;
+    });
+  };
+
+  const clearSelections = () => {
+    setSelectedBankIds(new Set());
+    setSelectedGoalCodes(new Set());
+  };
+
+  // Calculate selected totals
+  const getSelectedTotals = () => {
+    if (!drilldownData) return { bankTotal: 0, goalTotal: 0, difference: 0, isWithinTolerance: false };
+
+    const bankTotal = drilldownData.bankTransactions
+      .filter(t => selectedBankIds.has(t.id))
+      .reduce((sum, t) => sum + t.totalAmount, 0);
+
+    const goalTotal = drilldownData.goalTransactions
+      .filter(t => selectedGoalCodes.has(t.goalTransactionCode))
+      .reduce((sum, t) => sum + t.totalAmount, 0);
+
+    const difference = Math.abs(bankTotal - goalTotal);
+    const tolerance = Math.max(bankTotal * 0.01, 1); // 1% or 1 minimum
+    const isWithinTolerance = difference <= tolerance;
+
+    return { bankTotal, goalTotal, difference, isWithinTolerance };
+  };
+
+  // Create manual match
+  const handleCreateManualMatch = async () => {
+    if (selectedBankIds.size === 0 || selectedGoalCodes.size === 0) return;
+
+    const { isWithinTolerance } = getSelectedTotals();
+    if (!isWithinTolerance) {
+      setError('Cannot match: totals do not match within tolerance');
+      return;
+    }
+
+    setManualMatching(true);
+    try {
+      await createManualMatch({
+        bankTransactionIds: Array.from(selectedBankIds),
+        goalTransactionCodes: Array.from(selectedGoalCodes),
+        matchedBy: 'User',
+      });
+
+      // Clear selections
+      clearSelections();
+
+      // Refresh drilldown data
+      if (expandedGoal) {
+        const result = await fetchGoalTransactionsWithMatching(expandedGoal, {
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+        });
+        setDrilldownData({
+          bankTransactions: result.bankTransactions,
+          goalTransactions: result.goalTransactions,
+          summary: result.summary,
+        });
+      }
+
+      // Refresh the main goal list
+      await fetchData(pagination.page);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setManualMatching(false);
+    }
+  };
+
   const handleApplyFilters = () => {
     setExpandedGoal(null);
     setDrilldownData(null);
@@ -574,11 +673,13 @@ const GoalComparison = () => {
     if (expandedGoal === goalNum) {
       setExpandedGoal(null);
       setDrilldownData(null);
-      // Don't clear pending tags - allow tagging across multiple goals
+      // Clear selections when collapsing (but keep pending tags for cross-goal tagging)
+      clearSelections();
       return;
     }
 
-    // Don't clear pending tags when switching goals - allow cross-goal tagging
+    // Clear selections when switching goals (but keep pending tags for cross-goal tagging)
+    clearSelections();
     setExpandedGoal(goalNum);
     setDrilldownLoading(true);
     try {
@@ -672,6 +773,7 @@ const GoalComparison = () => {
       AMOUNT: { bg: "bg-blue-100", text: "text-blue-800" },
       SPLIT_BANK_TO_FUND: { bg: "bg-purple-100", text: "text-purple-800" },
       SPLIT_FUND_TO_BANK: { bg: "bg-indigo-100", text: "text-indigo-800" },
+      MANUAL: { bg: "bg-yellow-100", text: "text-yellow-800" },
     };
     const badge = badges[type] || { bg: "bg-gray-100", text: "text-gray-800" };
     return `${badge.bg} ${badge.text}`;
@@ -1184,18 +1286,38 @@ const GoalComparison = () => {
                               <div className="grid grid-cols-2 gap-4">
                                 {/* Bank Transactions */}
                                 <div>
-                                  <h4 className="font-medium text-gray-700 mb-2">Bank Transactions</h4>
+                                  <h4 className="font-medium text-gray-700 mb-2">
+                                    Bank Transactions
+                                    {selectedBankIds.size > 0 && (
+                                      <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
+                                        {selectedBankIds.size} selected
+                                      </span>
+                                    )}
+                                  </h4>
                                   <div className="space-y-2 max-h-80 overflow-y-auto">
                                     {drilldownData.bankTransactions.map((txn) => (
                                       <div
                                         key={txn.id}
                                         className={`border rounded p-2 text-sm ${
+                                          selectedBankIds.has(txn.id) ? "bg-purple-100 border-purple-400 ring-2 ring-purple-300" :
                                           txn.isMatched ? "bg-green-50 border-green-200" :
                                           txn.reviewTag ? "bg-blue-50 border-blue-200" : "bg-orange-50 border-orange-200"
                                         }`}
                                       >
                                         <div className="flex justify-between items-center">
-                                          <span className="font-mono text-xs">{formatDate(txn.transactionDate)}</span>
+                                          <div className="flex items-center gap-2">
+                                            {/* Checkbox for unmatched transactions */}
+                                            {!txn.isMatched && (
+                                              <input
+                                                type="checkbox"
+                                                checked={selectedBankIds.has(txn.id)}
+                                                onChange={() => toggleBankSelection(txn.id)}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="h-4 w-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
+                                              />
+                                            )}
+                                            <span className="font-mono text-xs">{formatDate(txn.transactionDate)}</span>
+                                          </div>
                                           <span className={`text-xs px-1.5 py-0.5 rounded ${
                                             txn.transactionType === "DEPOSIT" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
                                           }`}>
@@ -1328,18 +1450,38 @@ const GoalComparison = () => {
 
                                 {/* Goal Transactions */}
                                 <div>
-                                  <h4 className="font-medium text-gray-700 mb-2">Goal Transactions</h4>
+                                  <h4 className="font-medium text-gray-700 mb-2">
+                                    Goal Transactions
+                                    {selectedGoalCodes.size > 0 && (
+                                      <span className="ml-2 text-xs bg-purple-100 text-purple-700 px-2 py-0.5 rounded-full">
+                                        {selectedGoalCodes.size} selected
+                                      </span>
+                                    )}
+                                  </h4>
                                   <div className="space-y-2 max-h-80 overflow-y-auto">
                                     {drilldownData.goalTransactions.map((txn) => (
                                       <div
                                         key={txn.goalTransactionCode}
                                         className={`border rounded p-2 text-sm ${
+                                          selectedGoalCodes.has(txn.goalTransactionCode) ? "bg-purple-100 border-purple-400 ring-2 ring-purple-300" :
                                           txn.isMatched ? "bg-green-50 border-green-200" :
                                           txn.reviewTag ? "bg-blue-50 border-blue-200" : "bg-orange-50 border-orange-200"
                                         }`}
                                       >
                                         <div className="flex justify-between items-center">
-                                          <span className="font-mono text-xs">{formatDate(txn.transactionDate)}</span>
+                                          <div className="flex items-center gap-2">
+                                            {/* Checkbox for unmatched transactions */}
+                                            {!txn.isMatched && (
+                                              <input
+                                                type="checkbox"
+                                                checked={selectedGoalCodes.has(txn.goalTransactionCode)}
+                                                onChange={() => toggleGoalSelection(txn.goalTransactionCode)}
+                                                onClick={(e) => e.stopPropagation()}
+                                                className="h-4 w-4 text-purple-600 rounded border-gray-300 focus:ring-purple-500"
+                                              />
+                                            )}
+                                            <span className="font-mono text-xs">{formatDate(txn.transactionDate)}</span>
+                                          </div>
                                           <span className={`text-xs px-1.5 py-0.5 rounded ${
                                             txn.transactionType === "DEPOSIT" ? "bg-green-100 text-green-800" : "bg-red-100 text-red-800"
                                           }`}>
@@ -1469,6 +1611,66 @@ const GoalComparison = () => {
                                   </div>
                                 </div>
                               </div>
+
+                              {/* Manual Match Bar - shows when both bank and goal transactions are selected */}
+                              {(selectedBankIds.size > 0 || selectedGoalCodes.size > 0) && (
+                                <div className="mt-4 pt-4 border-t border-purple-300 bg-purple-50 -mx-4 px-4 py-3 rounded-b-lg">
+                                  <div className="flex items-center justify-between">
+                                    <div className="flex-1">
+                                      <div className="flex items-center gap-2 mb-2">
+                                        <Link2 className="h-5 w-5 text-purple-600" />
+                                        <span className="font-medium text-purple-800">Manual Match</span>
+                                      </div>
+                                      <div className="grid grid-cols-3 gap-4 text-sm">
+                                        <div>
+                                          <span className="text-purple-600">Bank ({selectedBankIds.size}):</span>
+                                          <span className="ml-2 font-bold">{formatCurrency(getSelectedTotals().bankTotal)}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-purple-600">Goal ({selectedGoalCodes.size}):</span>
+                                          <span className="ml-2 font-bold">{formatCurrency(getSelectedTotals().goalTotal)}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-gray-600">Difference:</span>
+                                          <span className={`ml-2 font-bold ${
+                                            getSelectedTotals().isWithinTolerance ? 'text-green-600' : 'text-red-600'
+                                          }`}>
+                                            {formatCurrency(getSelectedTotals().difference)}
+                                            {getSelectedTotals().isWithinTolerance ? ' ✓' : ' (exceeds tolerance)'}
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="flex gap-2 ml-4">
+                                      <button
+                                        onClick={clearSelections}
+                                        disabled={manualMatching}
+                                        className="inline-flex items-center px-3 py-1.5 text-sm bg-white border border-purple-300 text-purple-700 rounded hover:bg-purple-100 disabled:opacity-50"
+                                      >
+                                        <X className="h-4 w-4 mr-1" />
+                                        Clear
+                                      </button>
+                                      <button
+                                        onClick={handleCreateManualMatch}
+                                        disabled={manualMatching || selectedBankIds.size === 0 || selectedGoalCodes.size === 0 || !getSelectedTotals().isWithinTolerance}
+                                        className="inline-flex items-center px-4 py-1.5 text-sm bg-purple-600 text-white rounded hover:bg-purple-700 disabled:opacity-50 disabled:cursor-not-allowed"
+                                      >
+                                        {manualMatching ? (
+                                          <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+                                        ) : (
+                                          <Link2 className="h-4 w-4 mr-1" />
+                                        )}
+                                        Match Selected
+                                      </button>
+                                    </div>
+                                  </div>
+                                  {selectedBankIds.size === 0 || selectedGoalCodes.size === 0 ? (
+                                    <p className="text-xs text-purple-600 mt-2">
+                                      Select at least one bank transaction AND one goal transaction to create a manual match
+                                    </p>
+                                  ) : null}
+                                </div>
+                              )}
 
                               {/* Pending Tags Indicator for this goal */}
                               {(() => {

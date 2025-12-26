@@ -721,6 +721,86 @@ router.post('/review/bulk', async (req: Request, res: Response, next: NextFuncti
 });
 
 /**
+ * Create a manual match between bank and goal transactions
+ * POST /api/goal-comparison/manual-match
+ *
+ * Links selected bank transactions to selected goal transactions
+ * Validates that totals match within tolerance
+ */
+router.post('/manual-match', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { bankTransactionIds, goalTransactionCodes, matchedBy } = req.body;
+
+    if (!bankTransactionIds || bankTransactionIds.length === 0) {
+      throw new AppError(400, 'At least one bank transaction is required');
+    }
+
+    if (!goalTransactionCodes || goalTransactionCodes.length === 0) {
+      throw new AppError(400, 'At least one goal transaction is required');
+    }
+
+    if (!matchedBy) {
+      throw new AppError(400, 'Matched by is required');
+    }
+
+    logger.info('Creating manual match', {
+      bankTransactionIds,
+      goalTransactionCodes,
+      matchedBy,
+    });
+
+    const result = await SmartMatcher.createManualMatch(
+      bankTransactionIds,
+      goalTransactionCodes,
+      matchedBy
+    );
+
+    res.json({
+      success: true,
+      ...result,
+    });
+  } catch (error) {
+    logger.error('Error creating manual match:', error);
+    next(error);
+  }
+});
+
+/**
+ * Remove a manual match
+ * DELETE /api/goal-comparison/manual-match
+ *
+ * Unlinks bank transactions from their matched goal transactions
+ */
+router.delete('/manual-match', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { bankTransactionIds, goalTransactionCodes } = req.body;
+
+    if ((!bankTransactionIds || bankTransactionIds.length === 0) &&
+        (!goalTransactionCodes || goalTransactionCodes.length === 0)) {
+      throw new AppError(400, 'At least one bank transaction or goal transaction is required');
+    }
+
+    logger.info('Removing manual match', {
+      bankTransactionIds,
+      goalTransactionCodes,
+    });
+
+    const result = await SmartMatcher.removeManualMatch(
+      bankTransactionIds || [],
+      goalTransactionCodes || []
+    );
+
+    res.json({
+      success: true,
+      unmatched: result,
+    });
+  } catch (error) {
+    logger.error('Error removing manual match:', error);
+    next(error);
+  }
+});
+
+/**
  * Get review status for a specific goal
  * GET /api/goal-comparison/:goalNumber/review-status
  */
