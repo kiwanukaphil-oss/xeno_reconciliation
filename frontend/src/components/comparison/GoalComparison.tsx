@@ -553,16 +553,32 @@ const GoalComparison = () => {
     }
   };
 
+  // Count pending tags for a specific goal
+  const getPendingTagsForGoal = (goalNum: string): number => {
+    let count = 0;
+    for (const [id, { type }] of pendingTags) {
+      // Bank transaction IDs are UUIDs, goal transaction codes contain the goal number
+      if (type === 'GOAL' && id.includes(goalNum)) {
+        count++;
+      }
+      // For bank transactions, we need to check drilldown data
+      if (type === 'BANK' && drilldownData && expandedGoal === goalNum) {
+        const bankTxn = drilldownData.bankTransactions.find(b => b.id === id);
+        if (bankTxn) count++;
+      }
+    }
+    return count;
+  };
+
   const handleGoalClick = async (goalNum: string) => {
     if (expandedGoal === goalNum) {
       setExpandedGoal(null);
       setDrilldownData(null);
-      setPendingTags(new Map()); // Clear pending tags when collapsing
+      // Don't clear pending tags - allow tagging across multiple goals
       return;
     }
 
-    // Clear pending tags when switching to a different goal
-    setPendingTags(new Map());
+    // Don't clear pending tags when switching goals - allow cross-goal tagging
     setExpandedGoal(goalNum);
     setDrilldownLoading(true);
     try {
@@ -958,6 +974,47 @@ const GoalComparison = () => {
         </div>
       </div>
 
+      {/* Floating Save All Bar - shows when there are pending tags across any goals */}
+      {pendingTags.size > 0 && (
+        <div className="bg-yellow-50 border border-yellow-300 rounded-lg p-4 mb-6 flex items-center justify-between shadow-sm">
+          <div className="flex items-center gap-3">
+            <div className="bg-yellow-200 rounded-full p-2">
+              <Tag className="h-5 w-5 text-yellow-700" />
+            </div>
+            <div>
+              <p className="font-medium text-yellow-800">
+                {pendingTags.size} pending tag{pendingTags.size !== 1 ? 's' : ''} ready to save
+              </p>
+              <p className="text-sm text-yellow-600">
+                Tags will be saved when you click "Save All & Refresh"
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2">
+            <button
+              onClick={clearPendingTags}
+              disabled={savingTags}
+              className="inline-flex items-center px-4 py-2 text-sm bg-white border border-yellow-300 text-yellow-700 rounded-lg hover:bg-yellow-100 disabled:opacity-50"
+            >
+              <X className="h-4 w-4 mr-1" />
+              Clear All
+            </button>
+            <button
+              onClick={saveAllPendingTags}
+              disabled={savingTags}
+              className="inline-flex items-center px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50"
+            >
+              {savingTags ? (
+                <Loader2 className="h-4 w-4 mr-1 animate-spin" />
+              ) : (
+                <Save className="h-4 w-4 mr-1" />
+              )}
+              Save All & Refresh
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* Error State */}
       {error && (
         <div className="bg-red-50 border border-red-200 rounded-lg p-4 mb-6">
@@ -1025,7 +1082,22 @@ const GoalComparison = () => {
                         </div>
                       </td>
                       <td className="px-4 py-3 text-sm font-mono">
-                        {row.goalNumber}
+                        <div className="flex items-center gap-2">
+                          {row.goalNumber}
+                          {/* Show pending tags badge */}
+                          {(() => {
+                            const count = Array.from(pendingTags.entries()).filter(([id, { type }]) => {
+                              if (type === 'GOAL') return id.includes(row.goalNumber);
+                              return false;
+                            }).length;
+                            if (count === 0) return null;
+                            return (
+                              <span className="bg-yellow-200 text-yellow-800 text-xs px-1.5 py-0.5 rounded-full">
+                                {count} pending
+                              </span>
+                            );
+                          })()}
+                        </div>
                       </td>
                       <td className="px-4 py-3 text-sm font-medium">
                         {row.clientName}
@@ -1398,36 +1470,33 @@ const GoalComparison = () => {
                                 </div>
                               </div>
 
-                              {/* Save All & Refresh Button Bar */}
-                              {pendingTags.size > 0 && (
-                                <div className="mt-4 pt-4 border-t border-gray-300 flex items-center justify-between bg-yellow-50 -mx-4 px-4 py-3 rounded-b-lg">
-                                  <div className="text-sm text-yellow-800">
-                                    <span className="font-medium">{pendingTags.size}</span> pending tag{pendingTags.size !== 1 ? 's' : ''} to save
+                              {/* Pending Tags Indicator for this goal */}
+                              {(() => {
+                                // Count pending tags for current goal
+                                const goalPendingCount = Array.from(pendingTags.entries()).filter(([id, { type }]) => {
+                                  if (type === 'GOAL') return id.includes(expandedGoal || '');
+                                  if (type === 'BANK' && drilldownData) {
+                                    return drilldownData.bankTransactions.some(b => b.id === id);
+                                  }
+                                  return false;
+                                }).length;
+
+                                if (goalPendingCount === 0) return null;
+
+                                return (
+                                  <div className="mt-4 pt-3 border-t border-yellow-300 bg-yellow-50 -mx-4 px-4 py-2 rounded-b-lg">
+                                    <div className="text-sm text-yellow-700 flex items-center gap-2">
+                                      <Tag className="h-4 w-4" />
+                                      <span>
+                                        <span className="font-medium">{goalPendingCount}</span> pending tag{goalPendingCount !== 1 ? 's' : ''} in this goal
+                                        {pendingTags.size > goalPendingCount && (
+                                          <span className="text-yellow-600"> ({pendingTags.size} total across all goals)</span>
+                                        )}
+                                      </span>
+                                    </div>
                                   </div>
-                                  <div className="flex gap-2">
-                                    <button
-                                      onClick={clearPendingTags}
-                                      disabled={savingTags}
-                                      className="inline-flex items-center px-3 py-1.5 text-sm bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50"
-                                    >
-                                      <X className="h-4 w-4 mr-1" />
-                                      Clear All
-                                    </button>
-                                    <button
-                                      onClick={saveAllPendingTags}
-                                      disabled={savingTags}
-                                      className="inline-flex items-center px-4 py-1.5 text-sm bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50"
-                                    >
-                                      {savingTags ? (
-                                        <Loader2 className="h-4 w-4 mr-1 animate-spin" />
-                                      ) : (
-                                        <Save className="h-4 w-4 mr-1" />
-                                      )}
-                                      Save All & Refresh
-                                    </button>
-                                  </div>
-                                </div>
-                              )}
+                                );
+                              })()}
                             </div>
                           ) : (
                             <p className="text-gray-500 text-center py-4">No transaction data available</p>
@@ -1518,7 +1587,22 @@ const GoalComparison = () => {
                         </div>
                       </td>
                       <td className="px-2 py-2 font-mono text-xs">
-                        {row.goalNumber}
+                        <div className="flex items-center gap-1">
+                          {row.goalNumber}
+                          {/* Show pending tags badge */}
+                          {(() => {
+                            const count = Array.from(pendingTags.entries()).filter(([id, { type }]) => {
+                              if (type === 'GOAL') return id.includes(row.goalNumber);
+                              return false;
+                            }).length;
+                            if (count === 0) return null;
+                            return (
+                              <span className="bg-yellow-200 text-yellow-800 text-xs px-1 py-0.5 rounded-full">
+                                {count}
+                              </span>
+                            );
+                          })()}
+                        </div>
                       </td>
                       <td className="px-2 py-2 font-medium max-w-[120px] truncate" title={row.clientName}>
                         {row.clientName}
