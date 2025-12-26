@@ -1761,9 +1761,10 @@ export class SmartMatcher {
       throw new Error(`Transactions must have opposite types. Both are ${txn1.transactionType}`);
     }
 
-    // Validate amounts match
-    if (Number(txn1.totalAmount) !== Number(txn2.totalAmount)) {
-      throw new Error(`Amounts must match. Found ${txn1.totalAmount} and ${txn2.totalAmount}`);
+    // Validate amounts sum to zero (one positive, one negative with same absolute value)
+    const sum = Number(txn1.totalAmount) + Number(txn2.totalAmount);
+    if (Math.abs(sum) > 0.01) { // Allow small tolerance for floating point
+      throw new Error(`Amounts must sum to zero. Found ${txn1.totalAmount} + ${txn2.totalAmount} = ${sum}`);
     }
 
     // Update both transactions
