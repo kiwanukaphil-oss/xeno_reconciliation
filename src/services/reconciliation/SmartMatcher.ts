@@ -1334,9 +1334,17 @@ export class SmartMatcher {
     }
 
     if (filters?.reviewTag) {
-      conditions.push(`review_tag = $${paramIndex}`);
-      params.push(filters.reviewTag);
-      paramIndex++;
+      if (filters.reviewTag === '__NO_TAG__') {
+        // Special value to filter for transactions with no tag (NULL)
+        conditions.push(`review_tag IS NULL`);
+      } else if (filters.reviewTag === '__ANY_TAG__') {
+        // Special value to filter for transactions with any tag (NOT NULL)
+        conditions.push(`review_tag IS NOT NULL`);
+      } else {
+        conditions.push(`review_tag = $${paramIndex}`);
+        params.push(filters.reviewTag);
+        paramIndex++;
+      }
     }
 
     if (filters?.reviewStatus === 'PENDING') {

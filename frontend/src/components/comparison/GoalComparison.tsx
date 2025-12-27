@@ -2175,7 +2175,9 @@ const GoalComparison = () => {
                   onChange={(e) => setVarianceTagFilter(e.target.value)}
                   className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
                 >
-                  <option value="">All Tags</option>
+                  <option value="">All</option>
+                  <option value="__NO_TAG__">No Tag (Untagged)</option>
+                  <option value="__ANY_TAG__">Any Tag (Tagged)</option>
                   {VARIANCE_REVIEW_TAGS.map((tag) => (
                     <option key={tag.value} value={tag.value}>
                       {tag.label}
