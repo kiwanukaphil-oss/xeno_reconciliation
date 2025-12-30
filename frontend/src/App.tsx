@@ -6,14 +6,16 @@ import {
   Menu,
   X,
   Home,
-  CheckSquare,
   TrendingUp,
-  Users,
   DollarSign,
   Wallet,
   Building2,
   Scale,
   Target,
+  ChevronDown,
+  ChevronRight,
+  FolderOpen,
+  GitCompare,
 } from "lucide-react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
@@ -26,18 +28,40 @@ import BankUpload from "./components/bank-upload/BankUpload";
 import GoalTransactions from "./components/transactions/GoalTransactions";
 import FundTransactions from "./components/transactions/FundTransactions";
 import BankTransactions from "./components/transactions/BankTransactions";
-import ApprovalQueue from "./components/approval/ApprovalQueue";
 import { FundPrices } from "./components/fund-price/FundPrices";
 import { UnitRegistry } from "./components/unit-registry/UnitRegistry";
 import TransactionComparison from "./components/comparison/TransactionComparison";
 import GoalComparison from "./components/comparison/GoalComparison";
 import FundComparison from "./components/comparison/FundComparison";
 
+interface MenuItem {
+  id: string;
+  name: string;
+  icon: any;
+  description: string;
+}
+
+interface MenuGroup {
+  id: string;
+  name: string;
+  icon: any;
+  items: MenuItem[];
+}
+
+type MenuEntry = MenuItem | MenuGroup;
+
+const isGroup = (entry: MenuEntry): entry is MenuGroup => {
+  return "items" in entry;
+};
+
 const App = () => {
   const [activeModule, setActiveModule] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
+    new Set(["uploads", "transactions", "variance-analysis"])
+  );
 
-  const modules = [
+  const menuStructure: MenuEntry[] = [
     {
       id: "dashboard",
       name: "Dashboard",
@@ -45,40 +69,54 @@ const App = () => {
       description: "Overview and statistics",
     },
     {
-      id: "upload",
-      name: "Fund Upload",
+      id: "uploads",
+      name: "Uploads",
       icon: Upload,
-      description: "Upload CSV/Excel files",
+      items: [
+        {
+          id: "fund-upload",
+          name: "Fund Upload",
+          icon: Upload,
+          description: "Upload fund transaction files",
+        },
+        {
+          id: "bank-upload",
+          name: "Bank Upload",
+          icon: Building2,
+          description: "Upload bank transaction files",
+        },
+        {
+          id: "fund-prices",
+          name: "Fund Price Upload",
+          icon: DollarSign,
+          description: "Upload daily fund prices",
+        },
+      ],
     },
     {
-      id: "bank-upload",
-      name: "Bank Upload",
-      icon: Building2,
-      description: "Upload bank transaction files",
-    },
-    {
-      id: "goal-comparison",
-      name: "Goal Comparison",
-      icon: Target,
-      description: "Compare totals by goal with smart matching",
-    },
-    {
-      id: "fund-comparison",
-      name: "Fund Comparison",
-      icon: BarChart3,
-      description: "Compare fund-level variances by goal",
-    },
-    {
-      id: "transaction-comparison",
-      name: "Transaction Comparison",
-      icon: Scale,
-      description: "Compare bank and fund transactions",
-    },
-    {
-      id: "fund-prices",
-      name: "Fund Prices",
-      icon: DollarSign,
-      description: "Upload and view daily fund prices",
+      id: "transactions",
+      name: "Transactions",
+      icon: FolderOpen,
+      items: [
+        {
+          id: "goal-transactions",
+          name: "Goal Transactions",
+          icon: TrendingUp,
+          description: "Aggregated goal transactions",
+        },
+        {
+          id: "bank-transactions",
+          name: "Bank Transactions",
+          icon: Building2,
+          description: "Uploaded bank transaction records",
+        },
+        {
+          id: "fund-transactions",
+          name: "Fund Transactions",
+          icon: FileText,
+          description: "Individual fund transactions",
+        },
+      ],
     },
     {
       id: "unit-registry",
@@ -87,42 +125,49 @@ const App = () => {
       description: "Client portfolio positions and values",
     },
     {
-      id: "goal-transactions",
-      name: "Goal Transactions",
-      icon: TrendingUp,
-      description: "Aggregated goal transactions",
-    },
-    {
-      id: "fund-transactions",
-      name: "Fund Transactions",
-      icon: FileText,
-      description: "Individual fund transactions",
-    },
-    {
-      id: "bank-transactions",
-      name: "Bank Transactions",
-      icon: Building2,
-      description: "Uploaded bank transaction records",
-    },
-    {
-      id: "approval",
-      name: "Approval Queue",
-      icon: CheckSquare,
-      description: "Approve new entities",
-    },
-    {
-      id: "master-data",
-      name: "Master Data",
-      icon: Users,
-      description: "Clients, Accounts, Goals",
+      id: "variance-analysis",
+      name: "Variance Analysis",
+      icon: GitCompare,
+      items: [
+        {
+          id: "goal-comparison",
+          name: "Goal Comparison",
+          icon: Target,
+          description: "Compare totals by goal with smart matching",
+        },
+        {
+          id: "fund-comparison",
+          name: "Fund Comparison",
+          icon: BarChart3,
+          description: "Compare fund-level variances by goal",
+        },
+        {
+          id: "transaction-comparison",
+          name: "Variance Transactions",
+          icon: Scale,
+          description: "Review unmatched transactions",
+        },
+      ],
     },
   ];
+
+  const toggleGroup = (groupId: string) => {
+    setExpandedGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(groupId)) {
+        next.delete(groupId);
+      } else {
+        next.add(groupId);
+      }
+      return next;
+    });
+  };
 
   const renderActiveModule = () => {
     switch (activeModule) {
       case "dashboard":
         return <Dashboard />;
-      case "upload":
+      case "fund-upload":
         return <FundUpload />;
       case "bank-upload":
         return <BankUpload />;
@@ -142,14 +187,94 @@ const App = () => {
         return <FundTransactions />;
       case "bank-transactions":
         return <BankTransactions />;
-      case "approval":
-        return <ApprovalQueue />;
       default:
         return <Dashboard />;
     }
   };
 
-  const activeModuleInfo = modules.find((m) => m.id === activeModule);
+  // Find active module info (search in groups too)
+  const findModuleInfo = (): MenuItem | undefined => {
+    for (const entry of menuStructure) {
+      if (isGroup(entry)) {
+        const found = entry.items.find((item) => item.id === activeModule);
+        if (found) return found;
+      } else if (entry.id === activeModule) {
+        return entry;
+      }
+    }
+    return undefined;
+  };
+
+  const activeModuleInfo = findModuleInfo();
+
+  const renderMenuItem = (item: MenuItem, isNested: boolean = false) => {
+    const Icon = item.icon;
+    const isActive = activeModule === item.id;
+
+    return (
+      <button
+        key={item.id}
+        onClick={() => {
+          setActiveModule(item.id);
+          setSidebarOpen(false);
+        }}
+        className={`w-full flex items-center px-3 py-2.5 text-sm font-medium rounded-lg transition-colors ${
+          isNested ? "pl-10" : ""
+        } ${
+          isActive
+            ? "bg-blue-50 text-blue-700"
+            : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
+        }`}
+      >
+        <Icon
+          className={`mr-3 h-4 w-4 ${
+            isActive ? "text-blue-600" : "text-gray-400"
+          }`}
+        />
+        <span>{item.name}</span>
+      </button>
+    );
+  };
+
+  const renderMenuGroup = (group: MenuGroup) => {
+    const Icon = group.icon;
+    const isExpanded = expandedGroups.has(group.id);
+    const hasActiveChild = group.items.some(
+      (item) => item.id === activeModule
+    );
+
+    return (
+      <div key={group.id}>
+        <button
+          onClick={() => toggleGroup(group.id)}
+          className={`w-full flex items-center justify-between px-3 py-2.5 text-sm font-medium rounded-lg transition-colors ${
+            hasActiveChild
+              ? "text-blue-700 bg-blue-50/50"
+              : "text-gray-700 hover:bg-gray-50"
+          }`}
+        >
+          <div className="flex items-center">
+            <Icon
+              className={`mr-3 h-4 w-4 ${
+                hasActiveChild ? "text-blue-600" : "text-gray-500"
+              }`}
+            />
+            <span>{group.name}</span>
+          </div>
+          {isExpanded ? (
+            <ChevronDown className="h-4 w-4 text-gray-400" />
+          ) : (
+            <ChevronRight className="h-4 w-4 text-gray-400" />
+          )}
+        </button>
+        {isExpanded && (
+          <div className="mt-1 space-y-1">
+            {group.items.map((item) => renderMenuItem(item, true))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <QueryClientProvider client={queryClient}>
@@ -165,7 +290,7 @@ const App = () => {
             <div className="flex items-center">
               <BarChart3 className="h-8 w-8 text-blue-600 mr-3" />
               <span className="text-xl font-bold text-gray-900">
-                XENO Reconciliation
+                XENO Recon
               </span>
             </div>
             <button
@@ -177,50 +302,24 @@ const App = () => {
           </div>
 
           {/* Navigation */}
-          <nav className="mt-6 px-3">
+          <nav className="mt-4 px-3 flex-1 overflow-y-auto">
             <div className="space-y-1">
-              {modules.map((module) => {
-                const Icon = module.icon;
-                const isActive = activeModule === module.id;
-
-                return (
-                  <button
-                    key={module.id}
-                    onClick={() => {
-                      setActiveModule(module.id);
-                      setSidebarOpen(false);
-                    }}
-                    className={`w-full flex items-center px-3 py-3 text-sm font-medium rounded-lg transition-colors ${
-                      isActive
-                        ? "bg-blue-50 text-blue-700 border-r-2 border-blue-600"
-                        : "text-gray-600 hover:bg-gray-50 hover:text-gray-900"
-                    }`}
-                  >
-                    <Icon
-                      className={`mr-3 h-5 w-5 ${
-                        isActive ? "text-blue-600" : "text-gray-400"
-                      }`}
-                    />
-                    <div className="text-left">
-                      <div className="font-medium">{module.name}</div>
-                      <div className="text-xs text-gray-500 mt-0.5">
-                        {module.description}
-                      </div>
-                    </div>
-                  </button>
-                );
-              })}
+              {menuStructure.map((entry) =>
+                isGroup(entry)
+                  ? renderMenuGroup(entry)
+                  : renderMenuItem(entry)
+              )}
             </div>
           </nav>
 
           {/* Status Footer */}
-          <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200">
+          <div className="absolute bottom-0 left-0 right-0 p-4 border-t border-gray-200 bg-white">
             <div className="flex items-center text-sm text-gray-600">
               <div className="w-2 h-2 bg-green-400 rounded-full mr-2"></div>
               <span>All Systems Operational</span>
             </div>
             <div className="text-xs text-gray-500 mt-1">
-              Version 1.0.0 • Production Ready
+              Version 1.0.0
             </div>
           </div>
         </div>
@@ -263,9 +362,7 @@ const App = () => {
                   <div className="text-sm font-medium text-gray-900">
                     System Admin
                   </div>
-                  <div className="text-xs text-gray-500">
-                    admin@xeno.com
-                  </div>
+                  <div className="text-xs text-gray-500">admin@xeno.com</div>
                 </div>
                 <div className="h-8 w-8 bg-blue-600 rounded-full flex items-center justify-center">
                   <span className="text-white text-sm font-medium">SA</span>
