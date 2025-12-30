@@ -248,6 +248,7 @@ export class BankCSVParser {
   /**
    * Parses date string to Date object
    * Supports multiple formats explicitly to avoid JavaScript Date parsing issues
+   * IMPORTANT: All dates are created in UTC to prevent timezone shift issues
    */
   static parseDate(dateStr: string | undefined): Date | null {
     if (!dateStr) return null;
@@ -276,6 +277,11 @@ export class BankCSVParser {
       return y < 50 ? 2000 + y : 1900 + y;
     };
 
+    // Helper to create UTC date (prevents timezone shift when storing in DB)
+    const createUTCDate = (year: number, month: number, day: number): Date => {
+      return new Date(Date.UTC(year, month, day));
+    };
+
     // 1. Try ISO format: YYYY-MM-DD or YYYY/MM/DD
     const isoMatch = cleanDate.match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
     if (isoMatch) {
@@ -283,7 +289,7 @@ export class BankCSVParser {
       const month = parseInt(isoMatch[2], 10) - 1;
       const day = parseInt(isoMatch[3], 10);
       if (month >= 0 && month <= 11 && day >= 1 && day <= 31) {
-        return new Date(year, month, day);
+        return createUTCDate(year, month, day);
       }
     }
 
@@ -295,7 +301,7 @@ export class BankCSVParser {
       const year = expandYear(parseInt(dayMonthYearMatch[3], 10));
       const month = months[monthStr];
       if (month !== undefined && day >= 1 && day <= 31) {
-        return new Date(year, month, day);
+        return createUTCDate(year, month, day);
       }
     }
 
@@ -307,7 +313,7 @@ export class BankCSVParser {
       const year = parseInt(europeanMatch[3], 10);
       // Validate ranges - if day > 12, it must be DD/MM format
       if (month >= 0 && month <= 11 && day >= 1 && day <= 31) {
-        return new Date(year, month, day);
+        return createUTCDate(year, month, day);
       }
     }
 
@@ -318,7 +324,7 @@ export class BankCSVParser {
       const month = parseInt(europeanShortMatch[2], 10) - 1;
       const year = expandYear(parseInt(europeanShortMatch[3], 10));
       if (month >= 0 && month <= 11 && day >= 1 && day <= 31) {
-        return new Date(year, month, day);
+        return createUTCDate(year, month, day);
       }
     }
 
@@ -330,7 +336,7 @@ export class BankCSVParser {
       const year = expandYear(parseInt(monthDayYearMatch[3], 10));
       const month = months[monthStr];
       if (month !== undefined && day >= 1 && day <= 31) {
-        return new Date(year, month, day);
+        return createUTCDate(year, month, day);
       }
     }
 
@@ -338,9 +344,9 @@ export class BankCSVParser {
     const numericMatch = cleanDate.match(/^(\d{5})$/);
     if (numericMatch) {
       const serial = parseInt(numericMatch[1], 10);
-      // Excel epoch is December 30, 1899
-      const excelEpoch = new Date(1899, 11, 30);
-      const result = new Date(excelEpoch.getTime() + serial * 24 * 60 * 60 * 1000);
+      // Excel epoch is December 30, 1899 in UTC
+      const excelEpochMs = Date.UTC(1899, 11, 30);
+      const result = new Date(excelEpochMs + serial * 24 * 60 * 60 * 1000);
       if (!isNaN(result.getTime())) {
         return result;
       }

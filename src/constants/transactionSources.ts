@@ -12,6 +12,7 @@ export const TRANSACTION_SOURCES = [
   'BANK',
   'MTN_MOMO',
   'AIRTEL_MONEY',
+  'RT_Adjustment',
 ] as const;
 
 export type TransactionSource = typeof TRANSACTION_SOURCES[number];

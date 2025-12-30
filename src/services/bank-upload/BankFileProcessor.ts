@@ -1,5 +1,5 @@
 import { logger } from '../../config/logger';
-import { BankCSVParser } from './parsers/BankCSVParser';
+import { BankUnifiedFileParser } from './parsers/BankUnifiedFileParser';
 import { BankTransactionValidator } from './validators/BankTransactionValidator';
 import { BankUploadBatchManager } from './database/BankUploadBatchManager';
 import { BankTransactionRepository } from './database/BankTransactionRepository';
@@ -22,9 +22,10 @@ export class BankFileProcessor {
       // Step 1: Update status to PARSING
       await BankUploadBatchManager.updateBatchStatus(batchId, 'PARSING');
 
-      // Step 2: Parse CSV file
-      logger.info('Step 1: Parsing bank file');
-      const transactions = await BankCSVParser.parseFile(filePath);
+      // Step 2: Parse file (CSV or Excel)
+      const fileType = BankUnifiedFileParser.getFileTypeDescription(filePath);
+      logger.info(`Step 1: Parsing bank file (${fileType})`);
+      const transactions = await BankUnifiedFileParser.parseFile(filePath);
 
       if (transactions.length === 0) {
         throw new Error('No valid transactions found in file');
@@ -155,8 +156,16 @@ export class BankFileProcessor {
     const errors: string[] = [];
 
     try {
+      // Check if file extension is supported
+      if (!BankUnifiedFileParser.isSupportedExtension(filePath)) {
+        errors.push(
+          `Unsupported file type. Supported types: ${BankUnifiedFileParser.SUPPORTED_EXTENSIONS.join(', ')}`
+        );
+        return { isValid: false, errors };
+      }
+
       // Validate file structure
-      const structureValidation = await BankCSVParser.validateFileStructure(filePath);
+      const structureValidation = await BankUnifiedFileParser.validateFileStructure(filePath);
 
       if (!structureValidation.valid) {
         errors.push(...structureValidation.errors);

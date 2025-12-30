@@ -42,6 +42,7 @@ const TRANSACTION_SOURCES = [
   "AIRTEL_APP",
   "AIRTEL_WEB",
   "Transfer_Reversal",
+  "RT_Adjustment",
 ] as const;
 
 interface Aggregates {

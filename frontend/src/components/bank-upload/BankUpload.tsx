@@ -150,11 +150,11 @@ const BankUpload = () => {
 
   const handleFiles = async (files: FileList) => {
     const file = files[0];
-    const allowedTypes = ['.csv'];
+    const allowedTypes = ['.csv', '.xlsx', '.xls'];
     const fileExtension = '.' + file.name.split('.').pop()?.toLowerCase();
 
     if (!allowedTypes.includes(fileExtension)) {
-      alert('Please upload only CSV files for bank transactions');
+      alert('Please upload CSV or Excel files (.csv, .xlsx, .xls) for bank transactions');
       return;
     }
 
@@ -364,7 +364,7 @@ const BankUpload = () => {
               <input
                 type="file"
                 id="bank-file-upload"
-                accept=".csv"
+                accept=".csv,.xlsx,.xls"
                 onChange={(e) => e.target.files && handleFiles(e.target.files)}
                 className="hidden"
               />
@@ -375,7 +375,7 @@ const BankUpload = () => {
                 <FileText className="h-4 w-4 mr-2" />
                 Choose File
               </label>
-              <p className="text-xs text-gray-500 mt-4">Supported formats: CSV only</p>
+              <p className="text-xs text-gray-500 mt-4">Supported formats: CSV, Excel (.xlsx, .xls)</p>
             </>
           )}
         </div>

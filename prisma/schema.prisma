@@ -645,6 +645,7 @@ enum TransactionSource {
   BANK
   MTN_MOMO
   AIRTEL_MONEY
+  RT_Adjustment
 }
 
 enum ReconciliationStatus {
