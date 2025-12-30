@@ -1521,6 +1521,8 @@ export class SmartMatcher {
 
   /**
    * Get all variance (unmatched) transactions for the Variance Review tab
+   * Uses the SAME smart matching logic as Goal Comparison drilldown (getGoalTransactions)
+   * This ensures Transaction Comparison and Goal Comparison show identical unmatched transactions
    */
   static async getVarianceTransactions(
     startDate: string,
@@ -1544,64 +1546,47 @@ export class SmartMatcher {
       missingInFundCount: number;  // BANK transactions (bank exists, no fund)
     };
   }> {
-    // Build filter conditions
-    const conditions: string[] = [];
-    const params: any[] = [startDate, endDate];
-    let paramIndex = 3;
+    const start = new Date(startDate);
+    const end = new Date(endDate);
 
+    // Step 1: Get all goals that have any bank or fund transactions in the date range
+    const goalsWithTransactions = await prisma.$queryRaw<{ goalNumber: string }[]>`
+      SELECT DISTINCT goal_number as "goalNumber" FROM (
+        SELECT b."goalNumber" as goal_number
+        FROM bank_goal_transactions b
+        WHERE b."transactionDate"::date >= ${startDate}::date
+          AND b."transactionDate"::date <= ${endDate}::date
+        UNION
+        SELECT g."goalNumber" as goal_number
+        FROM fund_transactions f
+        JOIN goals g ON f."goalId" = g.id
+        WHERE f."transactionDate"::date >= ${startDate}::date
+          AND f."transactionDate"::date <= ${endDate}::date
+      ) goals
+      ORDER BY goal_number
+    `;
+
+    // Filter by goal number if provided
+    let goalNumbers = goalsWithTransactions.map(g => g.goalNumber);
     if (filters?.goalNumber) {
-      conditions.push(`goal_number ILIKE $${paramIndex}`);
-      params.push(`%${filters.goalNumber}%`);
-      paramIndex++;
+      const searchTerm = filters.goalNumber.toLowerCase();
+      goalNumbers = goalNumbers.filter(gn => gn.toLowerCase().includes(searchTerm));
     }
 
-    if (filters?.clientSearch) {
-      conditions.push(`client_name ILIKE $${paramIndex}`);
-      params.push(`%${filters.clientSearch}%`);
-      paramIndex++;
+    // Step 2: For each goal, run smart matching and collect unmatched transactions
+    const allUnmatchedBankIds: string[] = [];
+    const allUnmatchedGoalCodes: string[] = [];
+
+    for (const goalNumber of goalNumbers) {
+      const result = await this.getGoalTransactions(goalNumber, start, end);
+      allUnmatchedBankIds.push(...result.unmatchedBank);
+      allUnmatchedGoalCodes.push(...result.unmatchedGoalTxn);
     }
 
-    if (filters?.reviewTag) {
-      if (filters.reviewTag === '__NO_TAG__') {
-        // Special value to filter for transactions with no tag (NULL)
-        conditions.push(`review_tag IS NULL`);
-      } else if (filters.reviewTag === '__ANY_TAG__') {
-        // Special value to filter for transactions with any tag (NOT NULL)
-        conditions.push(`review_tag IS NOT NULL`);
-      } else {
-        conditions.push(`review_tag = $${paramIndex}`);
-        params.push(filters.reviewTag);
-        paramIndex++;
-      }
-    }
-
-    if (filters?.reviewStatus === 'PENDING') {
-      conditions.push(`review_tag IS NULL`);
-    } else if (filters?.reviewStatus === 'REVIEWED') {
-      conditions.push(`review_tag IS NOT NULL`);
-    }
-
-    // Resolution status filter
-    if (filters?.resolutionStatus === 'RESOLVED') {
-      conditions.push(`variance_resolved = true`);
-    } else if (filters?.resolutionStatus === 'PENDING') {
-      conditions.push(`variance_resolved = false`);
-    }
-
-    // Transaction source filter (BANK = Missing in Fund, GOAL = Missing in Bank)
-    if (filters?.transactionSource) {
-      conditions.push(`transaction_source = $${paramIndex}`);
-      params.push(filters.transactionSource);
-      paramIndex++;
-    }
-
-    const filterClause = conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '';
-
-    // Combined query for unmatched bank and goal transactions
-    // Uses matchedGoalTransactionCode IS NULL to determine truly unmatched bank transactions
-    // Includes fund distribution columns (XUMMF, XUBF, XUDEF, XUREF) for actionable exports
-    const query = `
-      WITH unmatched_bank AS (
+    // Step 3: Fetch full details for unmatched bank transactions
+    let unmatchedBankData: any[] = [];
+    if (allUnmatchedBankIds.length > 0 && (!filters?.transactionSource || filters.transactionSource === 'BANK')) {
+      unmatchedBankData = await prisma.$queryRaw<any[]>`
         SELECT
           'BANK' as transaction_source,
           b.id,
@@ -1626,12 +1611,15 @@ export class SmartMatcher {
         FROM bank_goal_transactions b
         JOIN clients c ON b."clientId" = c.id
         JOIN accounts a ON b."accountId" = a.id
-        WHERE b."transactionDate"::date >= $1::date
-          AND b."transactionDate"::date <= $2::date
-          AND b."matchedGoalTransactionCode" IS NULL
-          AND (b."transactionId" IS NULL OR (b."transactionId" NOT LIKE '%Transfer_Reversal%' AND b."transactionId" != 'RT Change'))
-      ),
-      unmatched_goal AS (
+        WHERE b.id = ANY(${allUnmatchedBankIds})
+        ORDER BY b."transactionDate" DESC, b."goalNumber"
+      `;
+    }
+
+    // Step 4: Fetch full details for unmatched goal transactions
+    let unmatchedGoalData: any[] = [];
+    if (allUnmatchedGoalCodes.length > 0 && (!filters?.transactionSource || filters.transactionSource === 'GOAL')) {
+      unmatchedGoalData = await prisma.$queryRaw<any[]>`
         SELECT
           'GOAL' as transaction_source,
           f."goalTransactionCode" as id,
@@ -1658,36 +1646,64 @@ export class SmartMatcher {
         JOIN accounts a ON g."accountId" = a.id
         JOIN clients c ON a."clientId" = c.id
         JOIN funds fund ON f."fundId" = fund.id
-        LEFT JOIN bank_goal_transactions b ON f."goalTransactionCode" = b."matchedGoalTransactionCode"
-        WHERE f."transactionDate"::date >= $1::date
-          AND f."transactionDate"::date <= $2::date
-          AND (f."source" IS NULL OR f."source" != 'Transfer_Reversal')
-          AND b.id IS NULL
+        WHERE f."goalTransactionCode" = ANY(${allUnmatchedGoalCodes})
         GROUP BY f."goalTransactionCode", g."goalNumber", c."clientName", a."accountNumber",
                  f."transactionDate", f."transactionType", f."transactionId"
-      )
-      SELECT * FROM (
-        SELECT * FROM unmatched_bank
-        UNION ALL
-        SELECT * FROM unmatched_goal
-      ) combined
-      WHERE 1=1 ${filterClause}
-      ORDER BY transaction_date DESC, goal_number
-    `;
+        ORDER BY f."transactionDate" DESC, g."goalNumber"
+      `;
+    }
 
-    const results = await prisma.$queryRawUnsafe(query, ...params) as any[];
+    // Step 5: Combine and apply filters
+    let results = [...unmatchedBankData, ...unmatchedGoalData];
 
-    // Calculate summary
-    const totalUnmatched = results.length;
-    const pendingReview = results.filter(r => !r.review_tag).length;
+    // Apply client search filter
+    if (filters?.clientSearch) {
+      const searchTerm = filters.clientSearch.toLowerCase();
+      results = results.filter(r => r.client_name.toLowerCase().includes(searchTerm));
+    }
+
+    // Apply review tag filter
+    if (filters?.reviewTag) {
+      if (filters.reviewTag === '__NO_TAG__') {
+        results = results.filter(r => !r.review_tag);
+      } else if (filters.reviewTag === '__ANY_TAG__') {
+        results = results.filter(r => r.review_tag);
+      } else {
+        results = results.filter(r => r.review_tag === filters.reviewTag);
+      }
+    }
+
+    // Apply review status filter
+    if (filters?.reviewStatus === 'PENDING') {
+      results = results.filter(r => !r.review_tag);
+    } else if (filters?.reviewStatus === 'REVIEWED') {
+      results = results.filter(r => r.review_tag);
+    }
+
+    // Apply resolution status filter
+    if (filters?.resolutionStatus === 'RESOLVED') {
+      results = results.filter(r => r.variance_resolved === true);
+    } else if (filters?.resolutionStatus === 'PENDING') {
+      results = results.filter(r => !r.variance_resolved);
+    }
+
+    // Sort by date descending, then goal number
+    results.sort((a, b) => {
+      const dateCompare = new Date(b.transaction_date).getTime() - new Date(a.transaction_date).getTime();
+      if (dateCompare !== 0) return dateCompare;
+      return a.goal_number.localeCompare(b.goal_number);
+    });
+
+    // Calculate summary (before transactionSource filter for accurate tab counts)
+    const allResults = [...unmatchedBankData, ...unmatchedGoalData];
+    const totalUnmatched = allResults.length;
+    const pendingReview = allResults.filter(r => !r.review_tag).length;
     const reviewed = totalUnmatched - pendingReview;
-
-    // Count by transaction source
-    const missingInBankCount = results.filter(r => r.transaction_source === 'GOAL').length;
-    const missingInFundCount = results.filter(r => r.transaction_source === 'BANK').length;
+    const missingInBankCount = allResults.filter(r => r.transaction_source === 'GOAL').length;
+    const missingInFundCount = allResults.filter(r => r.transaction_source === 'BANK').length;
 
     const byTag: Record<string, number> = {};
-    for (const r of results) {
+    for (const r of allResults) {
       if (r.review_tag) {
         byTag[r.review_tag] = (byTag[r.review_tag] || 0) + 1;
       }
