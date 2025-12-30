@@ -832,7 +832,11 @@ export interface VarianceTransaction {
   transactionDate: string;
   transactionType: string;
   amount: number;
-  fundCode: string | null;
+  // 4-fund breakdown
+  xummfAmount: number;
+  xubfAmount: number;
+  xudefAmount: number;
+  xurefAmount: number;
   sourceTransactionId: string | null;
   reviewTag: VarianceReviewTag | null;
   reviewNotes: string | null;
@@ -849,6 +853,8 @@ export interface VarianceTransactionsSummary {
   pendingReview: number;
   reviewed: number;
   byTag: Record<string, number>;
+  missingInBankCount: number;  // GOAL transactions (fund exists, no bank)
+  missingInFundCount: number;  // BANK transactions (bank exists, no fund)
 }
 
 export interface VarianceTransactionsResponse {
@@ -981,6 +987,7 @@ export const fetchVarianceTransactions = async (params: {
   goalNumber?: string;
   clientSearch?: string;
   resolutionStatus?: 'RESOLVED' | 'PENDING' | 'ALL';
+  transactionSource?: 'BANK' | 'GOAL';
   page?: number;
   limit?: number;
 }): Promise<VarianceTransactionsResponse> => {
@@ -992,6 +999,7 @@ export const fetchVarianceTransactions = async (params: {
   if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
   if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
   if (params.resolutionStatus) queryParams.append("resolutionStatus", params.resolutionStatus);
+  if (params.transactionSource) queryParams.append("transactionSource", params.transactionSource);
   if (params.page) queryParams.append("page", params.page.toString());
   if (params.limit) queryParams.append("limit", params.limit.toString());
 

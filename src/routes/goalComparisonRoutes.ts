@@ -955,6 +955,7 @@ router.get('/variance-transactions', async (req: Request, res: Response, next: N
     const goalNumber = req.query.goalNumber as string;
     const clientSearch = req.query.clientSearch as string;
     const resolutionStatus = req.query.resolutionStatus as 'RESOLVED' | 'PENDING' | 'ALL';
+    const transactionSource = req.query.transactionSource as 'BANK' | 'GOAL' | undefined;
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 50;
 
@@ -968,6 +969,7 @@ router.get('/variance-transactions', async (req: Request, res: Response, next: N
       goalNumber,
       clientSearch,
       resolutionStatus,
+      transactionSource,
     });
 
     // Apply pagination
@@ -1008,6 +1010,7 @@ router.get('/variance-transactions/export', async (req: Request, res: Response, 
     const goalNumber = req.query.goalNumber as string;
     const clientSearch = req.query.clientSearch as string;
     const resolutionStatus = req.query.resolutionStatus as 'RESOLVED' | 'PENDING' | 'ALL';
+    const transactionSource = req.query.transactionSource as 'BANK' | 'GOAL' | undefined;
 
     // Default to last 30 days if no dates provided
     const endDateStr = endDate || new Date().toISOString().split('T')[0];
@@ -1019,6 +1022,7 @@ router.get('/variance-transactions/export', async (req: Request, res: Response, 
       goalNumber,
       clientSearch,
       resolutionStatus,
+      transactionSource,
     });
 
     // Create Excel workbook

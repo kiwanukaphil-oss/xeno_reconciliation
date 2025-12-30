@@ -1531,6 +1531,7 @@ export class SmartMatcher {
       goalNumber?: string;
       clientSearch?: string;
       resolutionStatus?: 'RESOLVED' | 'PENDING' | 'ALL';
+      transactionSource?: 'BANK' | 'GOAL';
     }
   ): Promise<{
     data: any[];
@@ -1539,6 +1540,8 @@ export class SmartMatcher {
       pendingReview: number;
       reviewed: number;
       byTag: Record<string, number>;
+      missingInBankCount: number;  // GOAL transactions (fund exists, no bank)
+      missingInFundCount: number;  // BANK transactions (bank exists, no fund)
     };
   }> {
     // Build filter conditions
@@ -1583,6 +1586,13 @@ export class SmartMatcher {
       conditions.push(`variance_resolved = true`);
     } else if (filters?.resolutionStatus === 'PENDING') {
       conditions.push(`variance_resolved = false`);
+    }
+
+    // Transaction source filter (BANK = Missing in Fund, GOAL = Missing in Bank)
+    if (filters?.transactionSource) {
+      conditions.push(`transaction_source = $${paramIndex}`);
+      params.push(filters.transactionSource);
+      paramIndex++;
     }
 
     const filterClause = conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '';
@@ -1672,6 +1682,10 @@ export class SmartMatcher {
     const pendingReview = results.filter(r => !r.review_tag).length;
     const reviewed = totalUnmatched - pendingReview;
 
+    // Count by transaction source
+    const missingInBankCount = results.filter(r => r.transaction_source === 'GOAL').length;
+    const missingInFundCount = results.filter(r => r.transaction_source === 'BANK').length;
+
     const byTag: Record<string, number> = {};
     for (const r of results) {
       if (r.review_tag) {
@@ -1707,6 +1721,8 @@ export class SmartMatcher {
         pendingReview,
         reviewed,
         byTag,
+        missingInBankCount,
+        missingInFundCount,
       },
     };
   }
