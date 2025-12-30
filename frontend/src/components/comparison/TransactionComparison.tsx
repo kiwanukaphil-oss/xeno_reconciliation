@@ -67,6 +67,7 @@ interface Aggregates {
   matchedCount: number;
   varianceCount: number;
   missingInFundCount: number;
+  missingInBankCount?: number;
   matchRate: number;
 }
 
@@ -228,6 +229,8 @@ const TransactionComparison = () => {
         return "bg-orange-50 hover:bg-orange-100";
       case "MISSING_IN_FUND":
         return "bg-red-50 hover:bg-red-100";
+      case "MISSING_IN_BANK":
+        return "bg-purple-50 hover:bg-purple-100";
       default:
         return "hover:bg-gray-50";
     }
@@ -273,7 +276,9 @@ const TransactionComparison = () => {
               {aggregates.matchRate.toFixed(1)}%
             </p>
             <p className="text-xs text-gray-500 mt-1">
-              {aggregates.matchedCount} matched, {aggregates.varianceCount} variance, {aggregates.missingInFundCount} missing
+              {aggregates.matchedCount} matched, {aggregates.varianceCount} variance
+              {aggregates.missingInFundCount > 0 && `, ${aggregates.missingInFundCount} missing in fund`}
+              {(aggregates.missingInBankCount || 0) > 0 && `, ${aggregates.missingInBankCount} missing in bank`}
             </p>
           </div>
         </div>
@@ -373,6 +378,7 @@ const TransactionComparison = () => {
               <option value="MATCHED">Matched</option>
               <option value="VARIANCE_DETECTED">Variance Detected</option>
               <option value="MISSING_IN_FUND">Missing in Fund</option>
+              <option value="MISSING_IN_BANK">Missing in Bank</option>
             </select>
           </div>
         </div>

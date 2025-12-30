@@ -33,6 +33,7 @@ import {
   reviewGoalTransaction,
   bulkReviewTransactions,
   createManualMatch,
+  removeManualMatch,
   VARIANCE_REVIEW_TAGS,
   findReversalCandidates,
   linkReversal,
@@ -229,6 +230,7 @@ const GoalComparison = () => {
   const [selectedBankIds, setSelectedBankIds] = useState<Set<string>>(new Set());
   const [selectedGoalCodes, setSelectedGoalCodes] = useState<Set<string>>(new Set());
   const [manualMatching, setManualMatching] = useState(false);
+  const [unmatchingId, setUnmatchingId] = useState<string | null>(null); // Track which transaction is being unmatched
 
   // Smart matching batch processing state
   const [batchSize, setBatchSize] = useState(100);
@@ -567,6 +569,40 @@ const GoalComparison = () => {
     }
   };
 
+  // Remove a match (unmatch) - allows correcting wrong matches
+  const handleUnmatch = async (bankTransactionId: string) => {
+    if (!confirm('Are you sure you want to unmatch this transaction? It will become available for re-matching.')) {
+      return;
+    }
+
+    setUnmatchingId(bankTransactionId);
+    try {
+      await removeManualMatch({
+        bankTransactionIds: [bankTransactionId],
+      });
+
+      // Refresh drilldown data
+      if (expandedGoal) {
+        const result = await fetchGoalTransactionsWithMatching(expandedGoal, {
+          startDate: startDate || undefined,
+          endDate: endDate || undefined,
+        });
+        setDrilldownData({
+          bankTransactions: result.bankTransactions,
+          goalTransactions: result.goalTransactions,
+          summary: result.summary,
+        });
+      }
+
+      // Refresh the main goal list
+      await fetchData(pagination.page);
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setUnmatchingId(null);
+    }
+  };
+
   // Find reversal candidates for a transaction
   // NOTE: We don't pass the date range filter here because reversals can happen much later
   // (e.g., January deposit reversed in May). Search all unmatched transactions.
@@ -748,23 +784,6 @@ const GoalComparison = () => {
       setDrilldownData(null);
       fetchFundData(newPage);
     }
-  };
-
-  // Count pending tags for a specific goal
-  const getPendingTagsForGoal = (goalNum: string): number => {
-    let count = 0;
-    for (const [id, { type }] of pendingTags) {
-      // Bank transaction IDs are UUIDs, goal transaction codes contain the goal number
-      if (type === 'GOAL' && id.includes(goalNum)) {
-        count++;
-      }
-      // For bank transactions, we need to check drilldown data
-      if (type === 'BANK' && drilldownData && expandedGoal === goalNum) {
-        const bankTxn = drilldownData.bankTransactions.find(b => b.id === id);
-        if (bankTxn) count++;
-      }
-    }
-    return count;
   };
 
   const handleGoalClick = async (goalNum: string) => {
@@ -1436,13 +1455,34 @@ const GoalComparison = () => {
                                           <span>XUREF: {formatCurrency(txn.xurefAmount || 0)}</span>
                                         </div>
                                         {txn.matchInfo && (
-                                          <div className="mt-1">
-                                            <span className={`text-xs px-1.5 py-0.5 rounded ${getMatchTypeBadge(txn.matchInfo.matchType)}`}>
-                                              {txn.matchInfo.matchType.replace(/_/g, " ")}
-                                            </span>
-                                            <span className="text-xs text-gray-500 ml-2">
-                                              {Math.round(txn.matchInfo.confidence * 100)}% confidence
-                                            </span>
+                                          <div className="mt-1 flex items-center justify-between">
+                                            <div>
+                                              <span className={`text-xs px-1.5 py-0.5 rounded ${getMatchTypeBadge(txn.matchInfo.matchType)}`}>
+                                                {txn.matchInfo.matchType.replace(/_/g, " ")}
+                                              </span>
+                                              <span className="text-xs text-gray-500 ml-2">
+                                                {Math.round(txn.matchInfo.confidence * 100)}% confidence
+                                              </span>
+                                            </div>
+                                            {/* Unmatch button for matched transactions */}
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleUnmatch(txn.id);
+                                              }}
+                                              disabled={unmatchingId === txn.id}
+                                              className="text-xs px-2 py-0.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded border border-red-200 disabled:opacity-50"
+                                              title="Remove match and allow re-matching"
+                                            >
+                                              {unmatchingId === txn.id ? (
+                                                <Loader2 className="h-3 w-3 animate-spin" />
+                                              ) : (
+                                                <span className="flex items-center gap-1">
+                                                  <X className="h-3 w-3" />
+                                                  Unmatch
+                                                </span>
+                                              )}
+                                            </button>
                                           </div>
                                         )}
                                         {/* Review tagging for unmatched bank transactions */}
@@ -2021,13 +2061,34 @@ const GoalComparison = () => {
                                           <span>XUREF: {formatCurrency(txn.xurefAmount || 0)}</span>
                                         </div>
                                         {txn.matchInfo && (
-                                          <div className="mt-1">
-                                            <span className={`text-xs px-1.5 py-0.5 rounded ${getMatchTypeBadge(txn.matchInfo.matchType)}`}>
-                                              {txn.matchInfo.matchType.replace(/_/g, " ")}
-                                            </span>
-                                            <span className="text-xs text-gray-500 ml-2">
-                                              {Math.round(txn.matchInfo.confidence * 100)}% confidence
-                                            </span>
+                                          <div className="mt-1 flex items-center justify-between">
+                                            <div>
+                                              <span className={`text-xs px-1.5 py-0.5 rounded ${getMatchTypeBadge(txn.matchInfo.matchType)}`}>
+                                                {txn.matchInfo.matchType.replace(/_/g, " ")}
+                                              </span>
+                                              <span className="text-xs text-gray-500 ml-2">
+                                                {Math.round(txn.matchInfo.confidence * 100)}% confidence
+                                              </span>
+                                            </div>
+                                            {/* Unmatch button for matched transactions */}
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                handleUnmatch(txn.id);
+                                              }}
+                                              disabled={unmatchingId === txn.id}
+                                              className="text-xs px-2 py-0.5 text-red-600 hover:text-red-800 hover:bg-red-50 rounded border border-red-200 disabled:opacity-50"
+                                              title="Remove match and allow re-matching"
+                                            >
+                                              {unmatchingId === txn.id ? (
+                                                <Loader2 className="h-3 w-3 animate-spin" />
+                                              ) : (
+                                                <span className="flex items-center gap-1">
+                                                  <X className="h-3 w-3" />
+                                                  Unmatch
+                                                </span>
+                                              )}
+                                            </button>
                                           </div>
                                         )}
                                       </div>

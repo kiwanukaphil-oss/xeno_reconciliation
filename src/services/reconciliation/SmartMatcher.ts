@@ -1770,10 +1770,14 @@ export class SmartMatcher {
     const matchCode = `MANUAL:${Date.now()}:${goalTransactionCodes.join(',')}`;
 
     // Update bank transactions with the match
+    // Set both matchedGoalTransactionCode AND reconciliationStatus for consistency across views
     await prisma.bankGoalTransaction.updateMany({
       where: { id: { in: bankTransactionIds } },
       data: {
         matchedGoalTransactionCode: matchCode,
+        reconciliationStatus: 'MATCHED',
+        matchedAt: new Date(),
+        matchScore: 100, // Manual match = 100% confidence
         updatedAt: new Date(),
       },
     });
@@ -1806,11 +1810,15 @@ export class SmartMatcher {
     let unmatched = 0;
 
     // Unmatch by bank transaction IDs
+    // Reset both matchedGoalTransactionCode AND reconciliationStatus for consistency across views
     if (bankTransactionIds.length > 0) {
       const result = await prisma.bankGoalTransaction.updateMany({
         where: { id: { in: bankTransactionIds } },
         data: {
           matchedGoalTransactionCode: null,
+          reconciliationStatus: 'PENDING',
+          matchedAt: null,
+          matchScore: null,
           updatedAt: new Date(),
         },
       });
@@ -1826,6 +1834,9 @@ export class SmartMatcher {
         where: { matchedGoalTransactionCode: { in: goalTransactionCodes } },
         data: {
           matchedGoalTransactionCode: null,
+          reconciliationStatus: 'PENDING',
+          matchedAt: null,
+          matchScore: null,
           updatedAt: new Date(),
         },
       });
@@ -1840,6 +1851,9 @@ export class SmartMatcher {
           },
           data: {
             matchedGoalTransactionCode: null,
+            reconciliationStatus: 'PENDING',
+            matchedAt: null,
+            matchScore: null,
             updatedAt: new Date(),
           },
         });

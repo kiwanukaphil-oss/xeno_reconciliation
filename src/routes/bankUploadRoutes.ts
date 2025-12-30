@@ -622,17 +622,205 @@ router.get('/comparison', async (req: Request, res: Response, next: NextFunction
     }
 
     // Filter by reconciliation status at DB level for proper pagination
-    // Cast to text for comparison since reconciliationStatus is an enum
-    if (matchStatus && matchStatus !== 'ALL') {
-      conditions.push(`b."reconciliationStatus"::text = $${paramIndex}`);
-      params.push(matchStatus);
-      paramIndex++;
+    // Note: With matchedGoalTransactionCode as the authoritative source, we need smarter filtering:
+    // - MATCHED: Has matchedGoalTransactionCode OR reconciliationStatus = 'MATCHED'
+    // - VARIANCE_DETECTED/MISSING_IN_FUND: These require JavaScript calculation (fund transaction lookup)
+    //   so we do broad DB filtering and post-filter in JavaScript
+    // - MISSING_IN_BANK: Handled separately - requires starting from fund transactions
+    if (matchStatus && matchStatus !== 'ALL' && matchStatus !== 'MISSING_IN_BANK') {
+      if (matchStatus === 'MATCHED') {
+        conditions.push(`(b."matchedGoalTransactionCode" IS NOT NULL OR b."reconciliationStatus"::text = 'MATCHED')`);
+      } else if (matchStatus === 'VARIANCE_DETECTED' || matchStatus === 'MISSING_IN_FUND') {
+        // These statuses are CALCULATED based on fund transaction presence and amount comparison
+        // We can only pre-filter to exclude definitely matched ones, then post-filter
+        conditions.push(`(b."matchedGoalTransactionCode" IS NULL AND b."reconciliationStatus"::text != 'MATCHED')`);
+      } else {
+        // For other statuses, use exact match
+        conditions.push(`b."reconciliationStatus"::text = $${paramIndex}`);
+        params.push(matchStatus);
+        paramIndex++;
+      }
     }
 
     const whereClause = conditions.length > 0 ? `WHERE ${conditions.join(' AND ')}` : '';
 
+    // SPECIAL HANDLING: MISSING_IN_BANK - query from fund transactions first
+    if (matchStatus === 'MISSING_IN_BANK') {
+      // Build conditions for fund transactions
+      const fundConditions: string[] = [];
+      const fundParams: any[] = [];
+      let fundParamIndex = 1;
+
+      if (startDate) {
+        fundConditions.push(`f."transactionDate" >= $${fundParamIndex}`);
+        fundParams.push(new Date(startDate));
+        fundParamIndex++;
+      }
+
+      if (endDate) {
+        fundConditions.push(`f."transactionDate" <= $${fundParamIndex}`);
+        fundParams.push(new Date(endDate));
+        fundParamIndex++;
+      }
+
+      if (goalNumber) {
+        fundConditions.push(`g."goalNumber" ILIKE $${fundParamIndex}`);
+        fundParams.push(`%${goalNumber}%`);
+        fundParamIndex++;
+      }
+
+      if (accountNumber) {
+        fundConditions.push(`a."accountNumber" ILIKE $${fundParamIndex}`);
+        fundParams.push(`%${accountNumber}%`);
+        fundParamIndex++;
+      }
+
+      if (clientSearch) {
+        fundConditions.push(`c."clientName" ILIKE $${fundParamIndex}`);
+        fundParams.push(`%${clientSearch}%`);
+        fundParamIndex++;
+      }
+
+      const fundWhereClause = fundConditions.length > 0 ? `WHERE ${fundConditions.join(' AND ')}` : '';
+
+      // Get fund transaction groups that have NO matching bank transactions
+      const missingInBankQuery = `
+        WITH fund_groups AS (
+          SELECT
+            g."goalNumber",
+            f."transactionId",
+            MIN(f."transactionDate") as "transactionDate",
+            MIN(c."clientName") as "clientName",
+            MIN(a."accountNumber") as "accountNumber",
+            MIN(g."goalTitle") as "goalTitle",
+            SUM(f."amount")::float as "totalAmount",
+            SUM(CASE WHEN fund."fundCode" = 'XUMMF' THEN f."amount" ELSE 0 END)::float as "xummfAmount",
+            SUM(CASE WHEN fund."fundCode" = 'XUBF' THEN f."amount" ELSE 0 END)::float as "xubfAmount",
+            SUM(CASE WHEN fund."fundCode" = 'XUDEF' THEN f."amount" ELSE 0 END)::float as "xudefAmount",
+            SUM(CASE WHEN fund."fundCode" = 'XUREF' THEN f."amount" ELSE 0 END)::float as "xurefAmount",
+            COUNT(*)::int as "fundCount",
+            MIN(f."goalTransactionCode") as "goalTransactionCode"
+          FROM fund_transactions f
+          JOIN goals g ON f."goalId" = g."id"
+          JOIN accounts a ON g."accountId" = a."id"
+          JOIN clients c ON f."clientId" = c."id"
+          JOIN funds fund ON f."fundId" = fund."id"
+          ${fundWhereClause}
+          GROUP BY g."goalNumber", f."transactionId"
+        )
+        SELECT fg.*
+        FROM fund_groups fg
+        WHERE NOT EXISTS (
+          SELECT 1 FROM bank_goal_transactions b
+          WHERE b."goalNumber" = fg."goalNumber"
+          AND b."transactionId" = fg."transactionId"
+        )
+        ORDER BY fg."transactionDate" DESC
+        LIMIT $${fundParamIndex} OFFSET $${fundParamIndex + 1}
+      `;
+
+      fundParams.push(limit, skip);
+
+      // Count query for pagination
+      const countMissingInBankQuery = `
+        WITH fund_groups AS (
+          SELECT g."goalNumber", f."transactionId"
+          FROM fund_transactions f
+          JOIN goals g ON f."goalId" = g."id"
+          JOIN accounts a ON g."accountId" = a."id"
+          JOIN clients c ON f."clientId" = c."id"
+          ${fundWhereClause}
+          GROUP BY g."goalNumber", f."transactionId"
+        )
+        SELECT COUNT(*) as total
+        FROM fund_groups fg
+        WHERE NOT EXISTS (
+          SELECT 1 FROM bank_goal_transactions b
+          WHERE b."goalNumber" = fg."goalNumber"
+          AND b."transactionId" = fg."transactionId"
+        )
+      `;
+
+      const [fundGroups, countResult] = await Promise.all([
+        prisma.$queryRawUnsafe(missingInBankQuery, ...fundParams) as Promise<any[]>,
+        prisma.$queryRawUnsafe(countMissingInBankQuery, ...fundParams.slice(0, -2)) as Promise<any[]>,
+      ]);
+
+      const totalMissingInBank = parseInt(countResult[0]?.total || '0');
+
+      // Build comparison data for Missing in Bank
+      const missingInBankData = fundGroups.map((fg: any) => ({
+        matchKey: `${fg.goalNumber}-${fg.transactionId}`,
+        matchStatus: 'MISSING_IN_BANK' as const,
+        bankTransactionCount: 0,
+        bank: {
+          ids: [],
+          transactionDate: fg.transactionDate,
+          clientName: fg.clientName,
+          accountNumber: fg.accountNumber || '',
+          goalNumber: fg.goalNumber,
+          goalTitle: fg.goalTitle,
+          transactionId: fg.transactionId,
+          totalAmount: 0,
+          xummfAmount: 0,
+          xubfAmount: 0,
+          xudefAmount: 0,
+          xurefAmount: 0,
+          reconciliationStatus: 'N/A',
+        },
+        fund: {
+          goalTransactionCode: fg.goalTransactionCode,
+          transactionDate: fg.transactionDate,
+          clientName: fg.clientName,
+          totalAmount: Number(fg.totalAmount),
+          xummfAmount: Number(fg.xummfAmount),
+          xubfAmount: Number(fg.xubfAmount),
+          xudefAmount: Number(fg.xudefAmount),
+          xurefAmount: Number(fg.xurefAmount),
+          fundCount: fg.fundCount,
+        },
+        variance: {
+          totalDiff: -Number(fg.totalAmount), // Negative because bank is 0
+          xummfDiff: -Number(fg.xummfAmount),
+          xubfDiff: -Number(fg.xubfAmount),
+          xudefDiff: -Number(fg.xudefAmount),
+          xurefDiff: -Number(fg.xurefAmount),
+          hasVariance: true,
+        },
+      }));
+
+      // Calculate aggregates
+      let fundTotal = 0;
+      for (const row of missingInBankData) {
+        fundTotal += row.fund?.totalAmount || 0;
+      }
+
+      res.json({
+        success: true,
+        data: missingInBankData,
+        aggregates: {
+          bankTotal: 0,
+          fundTotal,
+          varianceAmount: fundTotal,
+          matchedCount: 0,
+          varianceCount: 0,
+          missingInFundCount: 0,
+          missingInBankCount: totalMissingInBank,
+          matchRate: 0,
+        },
+        pagination: {
+          page,
+          limit,
+          total: totalMissingInBank,
+          totalPages: Math.ceil(totalMissingInBank / limit),
+        },
+      });
+      return;
+    }
+
     // Step 1: Get aggregated bank transaction groups using raw SQL (paginated)
     // Note: Table names use snake_case as per Prisma @@map directives
+    // Include matchedGoalTransactionCode to determine if matched in Goal Comparison (authoritative source)
     const aggregatedBankQuery = `
       SELECT
         b."goalNumber",
@@ -654,7 +842,8 @@ router.get('/comparison', async (req: Request, res: Response, next: NextFunction
           WHEN b."reconciliationStatus" = 'MANUAL_REVIEW' THEN 1
           ELSE 0
         END) as "statusPriority",
-        MAX(b."reconciliationStatus") as "reconciliationStatus"
+        MAX(b."reconciliationStatus") as "reconciliationStatus",
+        MAX(b."matchedGoalTransactionCode") as "matchedGoalTransactionCode"
       FROM bank_goal_transactions b
       LEFT JOIN accounts a ON b."accountId" = a."id"
       ${whereClause}
@@ -730,10 +919,16 @@ router.get('/comparison', async (req: Request, res: Response, next: NextFunction
         const xurefDiff = bankXurefAmount - fundAmounts.XUREF;
 
         // Determine match status
+        // AUTHORITATIVE: If matchedGoalTransactionCode is set (from Goal Comparison), use that as the source of truth
+        // This ensures consistency between Goal Comparison and Transaction Comparison views
         let calculatedMatchStatus: string;
-        if (fundTransactions.length === 0) {
+        if (bankGroup.matchedGoalTransactionCode) {
+          // Matched in Goal Comparison - this is the authoritative status
+          calculatedMatchStatus = 'MATCHED';
+        } else if (fundTransactions.length === 0) {
           calculatedMatchStatus = 'MISSING_IN_FUND';
         } else if (Math.abs(totalDiff) <= Math.max(fundTotalAmount * 0.01, 1000)) {
+          // Amount-based match (fallback when not explicitly matched)
           calculatedMatchStatus = 'MATCHED';
         } else {
           calculatedMatchStatus = 'VARIANCE_DETECTED';
@@ -757,6 +952,7 @@ router.get('/comparison', async (req: Request, res: Response, next: NextFunction
             xudefAmount: bankXudefAmount,
             xurefAmount: bankXurefAmount,
             reconciliationStatus: bankGroup.reconciliationStatus,
+            matchedGoalTransactionCode: bankGroup.matchedGoalTransactionCode, // Source of truth from Goal Comparison
           },
           fund: fundTransactions.length > 0 ? {
             goalTransactionCode: fundGoalTransactionCode,
@@ -781,8 +977,12 @@ router.get('/comparison', async (req: Request, res: Response, next: NextFunction
       })
     );
 
-    // Note: matchStatus filtering is now done at DB level for proper pagination
-    const filteredData = comparisonData;
+    // Post-filter by calculated matchStatus since the calculation happens after DB query
+    // This ensures consistency between what user filters for and what's displayed
+    let filteredData = comparisonData;
+    if (matchStatus && matchStatus !== 'ALL') {
+      filteredData = comparisonData.filter(row => row.matchStatus === matchStatus);
+    }
 
     // Calculate aggregates from current page data
     let bankTotal = 0;
