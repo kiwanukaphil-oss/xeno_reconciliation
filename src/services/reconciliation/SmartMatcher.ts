@@ -1546,123 +1546,425 @@ export class SmartMatcher {
       missingInFundCount: number;  // BANK transactions (bank exists, no fund)
     };
   }> {
-    const start = new Date(startDate);
-    const end = new Date(endDate);
+    logger.info('getVarianceTransactions: Starting optimized variance detection', { startDate, endDate, filters });
 
-    // Step 1: Get all goals that have any bank or fund transactions in the date range
-    const goalsWithTransactions = await prisma.$queryRaw<{ goalNumber: string }[]>`
-      SELECT DISTINCT goal_number as "goalNumber" FROM (
-        SELECT b."goalNumber" as goal_number
+    // STEP 1: First identify goals with POTENTIAL variance using lightweight SQL aggregation
+    // This dramatically reduces the data we need to process
+    const goalsWithVariance = await prisma.$queryRaw<{
+      goal_number: string;
+      bank_deposit_total: number;
+      bank_withdrawal_total: number;
+      fund_deposit_total: number;
+      fund_withdrawal_total: number;
+      bank_only: boolean;
+      fund_only: boolean;
+    }[]>`
+      WITH bank_totals AS (
+        SELECT
+          b."goalNumber" as goal_number,
+          SUM(CASE WHEN b."transactionType" = 'DEPOSIT' THEN b."totalAmount" ELSE 0 END) as deposit_total,
+          SUM(CASE WHEN b."transactionType" = 'WITHDRAWAL' THEN b."totalAmount" ELSE 0 END) as withdrawal_total
         FROM bank_goal_transactions b
         WHERE b."transactionDate"::date >= ${startDate}::date
           AND b."transactionDate"::date <= ${endDate}::date
-        UNION
-        SELECT g."goalNumber" as goal_number
+          AND b."transactionId" NOT LIKE '%Transfer_Reversal%'
+          AND b."transactionId" != 'RT Change'
+        GROUP BY b."goalNumber"
+      ),
+      fund_totals AS (
+        SELECT
+          g."goalNumber" as goal_number,
+          SUM(CASE WHEN f."transactionType" = 'DEPOSIT' THEN f."amount" ELSE 0 END) as deposit_total,
+          SUM(CASE WHEN f."transactionType" = 'WITHDRAWAL' THEN f."amount" ELSE 0 END) as withdrawal_total
         FROM fund_transactions f
         JOIN goals g ON f."goalId" = g.id
         WHERE f."transactionDate"::date >= ${startDate}::date
           AND f."transactionDate"::date <= ${endDate}::date
-      ) goals
+          AND f."source" != 'Transfer_Reversal'
+        GROUP BY g."goalNumber"
+      )
+      SELECT
+        COALESCE(b.goal_number, f.goal_number) as goal_number,
+        COALESCE(b.deposit_total, 0) as bank_deposit_total,
+        COALESCE(b.withdrawal_total, 0) as bank_withdrawal_total,
+        COALESCE(f.deposit_total, 0) as fund_deposit_total,
+        COALESCE(f.withdrawal_total, 0) as fund_withdrawal_total,
+        (f.goal_number IS NULL) as bank_only,
+        (b.goal_number IS NULL) as fund_only
+      FROM bank_totals b
+      FULL OUTER JOIN fund_totals f ON b.goal_number = f.goal_number
+      WHERE
+        -- Has variance: totals don't match within tolerance
+        ABS(COALESCE(b.deposit_total, 0) - COALESCE(f.deposit_total, 0)) > ${AMOUNT_TOLERANCE_MIN}
+        OR ABS(COALESCE(b.withdrawal_total, 0) - COALESCE(f.withdrawal_total, 0)) > ${AMOUNT_TOLERANCE_MIN}
+        -- Or exists only on one side
+        OR f.goal_number IS NULL
+        OR b.goal_number IS NULL
       ORDER BY goal_number
     `;
 
-    // Filter by goal number if provided
-    let goalNumbers = goalsWithTransactions.map(g => g.goalNumber);
+    logger.info(`getVarianceTransactions: Found ${goalsWithVariance.length} goals with potential variance (out of all goals)`);
+
+    // Apply goal number filter early
+    let varianceGoals = goalsWithVariance;
     if (filters?.goalNumber) {
       const searchTerm = filters.goalNumber.toLowerCase();
-      goalNumbers = goalNumbers.filter(gn => gn.toLowerCase().includes(searchTerm));
+      varianceGoals = varianceGoals.filter(g => g.goal_number.toLowerCase().includes(searchTerm));
     }
 
-    // Step 2: For each goal, run smart matching and collect unmatched transactions
-    const allUnmatchedBankIds: string[] = [];
-    const allUnmatchedGoalCodes: string[] = [];
-
-    for (const goalNumber of goalNumbers) {
-      const result = await this.getGoalTransactions(goalNumber, start, end);
-      allUnmatchedBankIds.push(...result.unmatchedBank);
-      allUnmatchedGoalCodes.push(...result.unmatchedGoalTxn);
+    // If no goals have variance, return empty result early
+    if (varianceGoals.length === 0) {
+      logger.info('getVarianceTransactions: No goals with variance found');
+      return {
+        data: [],
+        summary: {
+          totalUnmatched: 0,
+          pendingReview: 0,
+          reviewed: 0,
+          byTag: {},
+          missingInBankCount: 0,
+          missingInFundCount: 0,
+        },
+      };
     }
 
-    // Step 3: Fetch full details for unmatched bank transactions
-    let unmatchedBankData: any[] = [];
-    if (allUnmatchedBankIds.length > 0 && (!filters?.transactionSource || filters.transactionSource === 'BANK')) {
-      unmatchedBankData = await prisma.$queryRaw<any[]>`
-        SELECT
-          'BANK' as transaction_source,
-          b.id,
-          b."goalNumber" as goal_number,
-          c."clientName" as client_name,
-          a."accountNumber" as account_number,
-          b."transactionDate" as transaction_date,
-          b."transactionType" as transaction_type,
-          b."totalAmount" as amount,
-          b."xummfAmount" as xummf_amount,
-          b."xubfAmount" as xubf_amount,
-          b."xudefAmount" as xudef_amount,
-          b."xurefAmount" as xuref_amount,
-          b."transactionId" as source_transaction_id,
-          b."reviewTag"::text as review_tag,
-          b."reviewNotes" as review_notes,
-          b."reviewedBy" as reviewed_by,
-          b."reviewedAt" as reviewed_at,
-          b."varianceResolved" as variance_resolved,
-          b."resolvedAt" as resolved_at,
-          b."resolvedReason" as resolved_reason
-        FROM bank_goal_transactions b
-        JOIN clients c ON b."clientId" = c.id
-        JOIN accounts a ON b."accountId" = a.id
-        WHERE b.id = ANY(${allUnmatchedBankIds})
-        ORDER BY b."transactionDate" DESC, b."goalNumber"
-      `;
+    const varianceGoalNumbers = varianceGoals.map(g => g.goal_number);
+
+    // STEP 2: Fetch transactions ONLY for goals with variance
+    const bankTxns = await prisma.$queryRaw<any[]>`
+      SELECT
+        b.id,
+        b."goalNumber" as goal_number,
+        b."transactionDate" as transaction_date,
+        b."transactionType" as transaction_type,
+        b."totalAmount" as total_amount,
+        b."xummfAmount" as xummf_amount,
+        b."xubfAmount" as xubf_amount,
+        b."xudefAmount" as xudef_amount,
+        b."xurefAmount" as xuref_amount,
+        b."transactionId" as transaction_id,
+        b."matchedGoalTransactionCode" as matched_goal_transaction_code,
+        b."reviewTag"::text as review_tag,
+        b."reviewNotes" as review_notes,
+        b."reviewedBy" as reviewed_by,
+        b."reviewedAt" as reviewed_at,
+        b."varianceResolved" as variance_resolved,
+        b."resolvedAt" as resolved_at,
+        b."resolvedReason" as resolved_reason,
+        c."clientName" as client_name,
+        a."accountNumber" as account_number
+      FROM bank_goal_transactions b
+      JOIN clients c ON b."clientId" = c.id
+      JOIN accounts a ON b."accountId" = a.id
+      WHERE b."transactionDate"::date >= ${startDate}::date
+        AND b."transactionDate"::date <= ${endDate}::date
+        AND b."transactionId" NOT LIKE '%Transfer_Reversal%'
+        AND b."transactionId" != 'RT Change'
+        AND b."goalNumber" = ANY(${varianceGoalNumbers})
+      ORDER BY b."goalNumber", b."transactionDate"
+    `;
+
+    logger.info(`getVarianceTransactions: Fetched ${bankTxns.length} bank transactions for variance goals`);
+
+    const fundTxns = await prisma.$queryRaw<any[]>`
+      SELECT
+        f.id,
+        f."goalTransactionCode" as goal_transaction_code,
+        f."transactionDate" as transaction_date,
+        f."transactionType" as transaction_type,
+        f."amount",
+        f."transactionId" as transaction_id,
+        f."reviewTag"::text as review_tag,
+        f."reviewNotes" as review_notes,
+        f."reviewedBy" as reviewed_by,
+        f."reviewedAt" as reviewed_at,
+        f."varianceResolved" as variance_resolved,
+        f."resolvedAt" as resolved_at,
+        f."resolvedReason" as resolved_reason,
+        g."goalNumber" as goal_number,
+        c."clientName" as client_name,
+        a."accountNumber" as account_number,
+        fund."fundCode" as fund_code
+      FROM fund_transactions f
+      JOIN goals g ON f."goalId" = g.id
+      JOIN accounts a ON g."accountId" = a.id
+      JOIN clients c ON a."clientId" = c.id
+      JOIN funds fund ON f."fundId" = fund.id
+      WHERE f."transactionDate"::date >= ${startDate}::date
+        AND f."transactionDate"::date <= ${endDate}::date
+        AND f."source" != 'Transfer_Reversal'
+        AND g."goalNumber" = ANY(${varianceGoalNumbers})
+      ORDER BY g."goalNumber", f."transactionDate"
+    `;
+
+    logger.info(`getVarianceTransactions: Fetched ${fundTxns.length} fund transactions for variance goals`);
+
+    // STEP 3: Group transactions by goal and run matching in memory
+    const bankByGoal = new Map<string, any[]>();
+    for (const bt of bankTxns) {
+      const gn = bt.goal_number;
+      if (!bankByGoal.has(gn)) bankByGoal.set(gn, []);
+      bankByGoal.get(gn)!.push(bt);
     }
 
-    // Step 4: Fetch full details for unmatched goal transactions
-    let unmatchedGoalData: any[] = [];
-    if (allUnmatchedGoalCodes.length > 0 && (!filters?.transactionSource || filters.transactionSource === 'GOAL')) {
-      unmatchedGoalData = await prisma.$queryRaw<any[]>`
-        SELECT
-          'GOAL' as transaction_source,
-          f."goalTransactionCode" as id,
-          g."goalNumber" as goal_number,
-          c."clientName" as client_name,
-          a."accountNumber" as account_number,
-          f."transactionDate" as transaction_date,
-          f."transactionType" as transaction_type,
-          SUM(f."amount") as amount,
-          SUM(CASE WHEN fund."fundCode" = 'XUMMF' THEN f."amount" ELSE 0 END) as xummf_amount,
-          SUM(CASE WHEN fund."fundCode" = 'XUBF' THEN f."amount" ELSE 0 END) as xubf_amount,
-          SUM(CASE WHEN fund."fundCode" = 'XUDEF' THEN f."amount" ELSE 0 END) as xudef_amount,
-          SUM(CASE WHEN fund."fundCode" = 'XUREF' THEN f."amount" ELSE 0 END) as xuref_amount,
-          f."transactionId" as source_transaction_id,
-          MAX(f."reviewTag"::text) as review_tag,
-          MAX(f."reviewNotes") as review_notes,
-          MAX(f."reviewedBy") as reviewed_by,
-          MAX(f."reviewedAt") as reviewed_at,
-          BOOL_OR(f."varianceResolved") as variance_resolved,
-          MAX(f."resolvedAt") as resolved_at,
-          MAX(f."resolvedReason") as resolved_reason
-        FROM fund_transactions f
-        JOIN goals g ON f."goalId" = g.id
-        JOIN accounts a ON g."accountId" = a.id
-        JOIN clients c ON a."clientId" = c.id
-        JOIN funds fund ON f."fundId" = fund.id
-        WHERE f."goalTransactionCode" = ANY(${allUnmatchedGoalCodes})
-        GROUP BY f."goalTransactionCode", g."goalNumber", c."clientName", a."accountNumber",
-                 f."transactionDate", f."transactionType", f."transactionId"
-        ORDER BY f."transactionDate" DESC, g."goalNumber"
-      `;
+    // Group fund transactions by goalNumber, then aggregate by goalTransactionCode+type
+    const fundByGoal = new Map<string, Map<string, {
+      ids: string[];
+      originalCode: string;
+      total: number;
+      date: Date;
+      transactionId: string | null;
+      type: string;
+      xummf: number;
+      xubf: number;
+      xudef: number;
+      xuref: number;
+      reviewTag: string | null;
+      reviewNotes: string | null;
+      reviewedBy: string | null;
+      reviewedAt: Date | null;
+      clientName: string;
+      accountNumber: string;
+      varianceResolved: boolean;
+      resolvedAt: Date | null;
+      resolvedReason: string | null;
+    }>>();
+
+    for (const ft of fundTxns) {
+      const gn = ft.goal_number;
+      if (!fundByGoal.has(gn)) fundByGoal.set(gn, new Map());
+      const goalMap = fundByGoal.get(gn)!;
+
+      const code = `${ft.goal_transaction_code}|${ft.transaction_type}`;
+      if (!goalMap.has(code)) {
+        goalMap.set(code, {
+          ids: [],
+          originalCode: ft.goal_transaction_code,
+          total: 0,
+          date: new Date(ft.transaction_date),
+          transactionId: ft.transaction_id,
+          type: ft.transaction_type,
+          xummf: 0,
+          xubf: 0,
+          xudef: 0,
+          xuref: 0,
+          reviewTag: ft.review_tag,
+          reviewNotes: ft.review_notes,
+          reviewedBy: ft.reviewed_by,
+          reviewedAt: ft.reviewed_at,
+          clientName: ft.client_name,
+          accountNumber: ft.account_number,
+          varianceResolved: ft.variance_resolved || false,
+          resolvedAt: ft.resolved_at,
+          resolvedReason: ft.resolved_reason,
+        });
+      }
+      const group = goalMap.get(code)!;
+      group.ids.push(ft.id);
+      const amount = Number(ft.amount);
+      group.total += amount;
+
+      if (ft.fund_code === 'XUMMF') group.xummf += amount;
+      else if (ft.fund_code === 'XUBF') group.xubf += amount;
+      else if (ft.fund_code === 'XUDEF') group.xudef += amount;
+      else if (ft.fund_code === 'XUREF') group.xuref += amount;
+
+      if (!group.reviewTag && ft.review_tag) group.reviewTag = ft.review_tag;
+      if (!group.reviewNotes && ft.review_notes) group.reviewNotes = ft.review_notes;
+      if (!group.reviewedBy && ft.reviewed_by) group.reviewedBy = ft.reviewed_by;
+      if (!group.reviewedAt && ft.reviewed_at) group.reviewedAt = ft.reviewed_at;
     }
 
-    // Step 5: Combine and apply filters
+    // STEP 4: Run matching algorithm for each variance goal
+    const allUnmatchedBank: any[] = [];
+    const allUnmatchedGoal: any[] = [];
+
+    for (const goalNumber of varianceGoalNumbers) {
+      const goalBankTxns = bankByGoal.get(goalNumber) || [];
+      const fundGroups = fundByGoal.get(goalNumber) || new Map();
+
+      const matchedBankIds = new Set<string>();
+      const matchedFundIds = new Set<string>();
+
+      // PASS 0: MANUAL matches
+      const manualMatchGroups = new Map<string, any[]>();
+      for (const bankTxn of goalBankTxns) {
+        if (!bankTxn.matched_goal_transaction_code) continue;
+        if (!bankTxn.matched_goal_transaction_code.startsWith('MANUAL:')) continue;
+        const matchCode = bankTxn.matched_goal_transaction_code;
+        if (!manualMatchGroups.has(matchCode)) manualMatchGroups.set(matchCode, []);
+        manualMatchGroups.get(matchCode)!.push(bankTxn);
+      }
+
+      for (const [matchCode, bankGroup] of manualMatchGroups) {
+        if (bankGroup.every((b: any) => matchedBankIds.has(b.id))) continue;
+        const colonIndex = matchCode.indexOf(':', 7);
+        if (colonIndex === -1) continue;
+        const goalCodesStr = matchCode.substring(colonIndex + 1);
+        const goalCodes = goalCodesStr.split(',');
+
+        const allFundIds: string[] = [];
+        for (const goalCode of goalCodes) {
+          for (const [_, fundGroup] of fundGroups.entries()) {
+            if (fundGroup.originalCode === goalCode && !fundGroup.ids.some((id: string) => matchedFundIds.has(id))) {
+              allFundIds.push(...fundGroup.ids);
+            }
+          }
+        }
+
+        if (allFundIds.length > 0) {
+          bankGroup.filter((b: any) => !matchedBankIds.has(b.id)).forEach((b: any) => matchedBankIds.add(b.id));
+          allFundIds.forEach(id => matchedFundIds.add(id));
+        }
+      }
+
+      // PASS 1: Exact match by transactionId
+      for (const bankTxn of goalBankTxns) {
+        if (matchedBankIds.has(bankTxn.id)) continue;
+
+        for (const [_, fundGroup] of fundGroups.entries()) {
+          if (fundGroup.ids.some((id: string) => matchedFundIds.has(id))) continue;
+          if (fundGroup.transactionId !== bankTxn.transaction_id) continue;
+          if (fundGroup.type !== bankTxn.transaction_type) continue;
+
+          const bankAmount = Number(bankTxn.total_amount);
+          const tolerance = Math.max(fundGroup.total * AMOUNT_TOLERANCE_PERCENT, AMOUNT_TOLERANCE_MIN);
+          if (Math.abs(bankAmount - fundGroup.total) <= tolerance) {
+            matchedBankIds.add(bankTxn.id);
+            fundGroup.ids.forEach((id: string) => matchedFundIds.add(id));
+            break;
+          }
+        }
+      }
+
+      // PASS 2: Amount-based matching within date window
+      for (const bankTxn of goalBankTxns) {
+        if (matchedBankIds.has(bankTxn.id)) continue;
+
+        const bankAmount = Number(bankTxn.total_amount);
+        const bankDate = new Date(bankTxn.transaction_date);
+
+        for (const [_, fundGroup] of fundGroups.entries()) {
+          if (fundGroup.ids.some((id: string) => matchedFundIds.has(id))) continue;
+          if (fundGroup.type !== bankTxn.transaction_type) continue;
+
+          const fundDate = fundGroup.date;
+          const daysDiff = Math.abs((bankDate.getTime() - fundDate.getTime()) / (1000 * 60 * 60 * 24));
+
+          if (daysDiff <= DATE_WINDOW_DAYS) {
+            const tolerance = Math.max(fundGroup.total * AMOUNT_TOLERANCE_PERCENT, AMOUNT_TOLERANCE_MIN);
+            if (Math.abs(bankAmount - fundGroup.total) <= tolerance) {
+              matchedBankIds.add(bankTxn.id);
+              fundGroup.ids.forEach((id: string) => matchedFundIds.add(id));
+              break;
+            }
+          }
+        }
+      }
+
+      // PASS 3: Split detection - N bank → 1 fund
+      const stillUnmatchedBank = goalBankTxns.filter((b: any) => !matchedBankIds.has(b.id));
+      const stillUnmatchedFundGroups = Array.from(fundGroups.entries()).filter(
+        ([_, group]) => !group.ids.some((id: string) => matchedFundIds.has(id))
+      );
+
+      const bankByDateType = new Map<string, any[]>();
+      for (const bankTxn of stillUnmatchedBank) {
+        const dateStr = new Date(bankTxn.transaction_date).toISOString().split('T')[0];
+        const key = `${dateStr}-${bankTxn.transaction_type}`;
+        if (!bankByDateType.has(key)) bankByDateType.set(key, []);
+        bankByDateType.get(key)!.push(bankTxn);
+      }
+
+      for (const [_, fundGroup] of stillUnmatchedFundGroups) {
+        if (fundGroup.ids.some((id: string) => matchedFundIds.has(id))) continue;
+
+        const fundDateStr = fundGroup.date.toISOString().split('T')[0];
+        const key = `${fundDateStr}-${fundGroup.type}`;
+        const bankCandidates = bankByDateType.get(key) || [];
+
+        const unmatchedCandidates = bankCandidates.filter((b: any) => !matchedBankIds.has(b.id));
+        const combination = this.findCombinationSum(
+          unmatchedCandidates.map((b: any) => ({ id: b.id, amount: Number(b.total_amount) })),
+          fundGroup.total,
+          Math.max(fundGroup.total * AMOUNT_TOLERANCE_PERCENT, AMOUNT_TOLERANCE_MIN)
+        );
+
+        if (combination.length > 1) {
+          combination.forEach((c: any) => matchedBankIds.add(c.id));
+          fundGroup.ids.forEach((id: string) => matchedFundIds.add(id));
+        }
+      }
+
+      // Collect unmatched transactions
+      for (const bankTxn of goalBankTxns) {
+        if (!matchedBankIds.has(bankTxn.id)) {
+          allUnmatchedBank.push({
+            transaction_source: 'BANK',
+            id: bankTxn.id,
+            goal_number: bankTxn.goal_number,
+            client_name: bankTxn.client_name,
+            account_number: bankTxn.account_number,
+            transaction_date: bankTxn.transaction_date,
+            transaction_type: bankTxn.transaction_type,
+            amount: bankTxn.total_amount,
+            xummf_amount: bankTxn.xummf_amount,
+            xubf_amount: bankTxn.xubf_amount,
+            xudef_amount: bankTxn.xudef_amount,
+            xuref_amount: bankTxn.xuref_amount,
+            source_transaction_id: bankTxn.transaction_id,
+            review_tag: bankTxn.review_tag,
+            review_notes: bankTxn.review_notes,
+            reviewed_by: bankTxn.reviewed_by,
+            reviewed_at: bankTxn.reviewed_at,
+            variance_resolved: bankTxn.variance_resolved,
+            resolved_at: bankTxn.resolved_at,
+            resolved_reason: bankTxn.resolved_reason,
+          });
+        }
+      }
+
+      for (const [_, fundGroup] of fundGroups.entries()) {
+        if (!fundGroup.ids.some((id: string) => matchedFundIds.has(id))) {
+          allUnmatchedGoal.push({
+            transaction_source: 'GOAL',
+            id: fundGroup.originalCode,
+            goal_number: goalNumber,
+            client_name: fundGroup.clientName,
+            account_number: fundGroup.accountNumber,
+            transaction_date: fundGroup.date,
+            transaction_type: fundGroup.type,
+            amount: fundGroup.total,
+            xummf_amount: fundGroup.xummf,
+            xubf_amount: fundGroup.xubf,
+            xudef_amount: fundGroup.xudef,
+            xuref_amount: fundGroup.xuref,
+            source_transaction_id: fundGroup.transactionId,
+            review_tag: fundGroup.reviewTag,
+            review_notes: fundGroup.reviewNotes,
+            reviewed_by: fundGroup.reviewedBy,
+            reviewed_at: fundGroup.reviewedAt,
+            variance_resolved: fundGroup.varianceResolved,
+            resolved_at: fundGroup.resolvedAt,
+            resolved_reason: fundGroup.resolvedReason,
+          });
+        }
+      }
+    }
+
+    logger.info(`getVarianceTransactions: Found ${allUnmatchedBank.length} unmatched bank, ${allUnmatchedGoal.length} unmatched goal transactions`);
+
+    // STEP 5: Apply filters and return
+    let unmatchedBankData = filters?.transactionSource === 'GOAL' ? [] : allUnmatchedBank;
+    let unmatchedGoalData = filters?.transactionSource === 'BANK' ? [] : allUnmatchedGoal;
+
     let results = [...unmatchedBankData, ...unmatchedGoalData];
 
-    // Apply client search filter
     if (filters?.clientSearch) {
       const searchTerm = filters.clientSearch.toLowerCase();
       results = results.filter(r => r.client_name.toLowerCase().includes(searchTerm));
     }
 
-    // Apply review tag filter
     if (filters?.reviewTag) {
       if (filters.reviewTag === '__NO_TAG__') {
         results = results.filter(r => !r.review_tag);
@@ -1673,34 +1975,30 @@ export class SmartMatcher {
       }
     }
 
-    // Apply review status filter
     if (filters?.reviewStatus === 'PENDING') {
       results = results.filter(r => !r.review_tag);
     } else if (filters?.reviewStatus === 'REVIEWED') {
       results = results.filter(r => r.review_tag);
     }
 
-    // Apply resolution status filter
     if (filters?.resolutionStatus === 'RESOLVED') {
       results = results.filter(r => r.variance_resolved === true);
     } else if (filters?.resolutionStatus === 'PENDING') {
       results = results.filter(r => !r.variance_resolved);
     }
 
-    // Sort by date descending, then goal number
     results.sort((a, b) => {
       const dateCompare = new Date(b.transaction_date).getTime() - new Date(a.transaction_date).getTime();
       if (dateCompare !== 0) return dateCompare;
       return a.goal_number.localeCompare(b.goal_number);
     });
 
-    // Calculate summary (before transactionSource filter for accurate tab counts)
-    const allResults = [...unmatchedBankData, ...unmatchedGoalData];
+    const allResults = [...allUnmatchedBank, ...allUnmatchedGoal];
     const totalUnmatched = allResults.length;
     const pendingReview = allResults.filter(r => !r.review_tag).length;
     const reviewed = totalUnmatched - pendingReview;
-    const missingInBankCount = allResults.filter(r => r.transaction_source === 'GOAL').length;
-    const missingInFundCount = allResults.filter(r => r.transaction_source === 'BANK').length;
+    const missingInBankCount = allUnmatchedGoal.length;
+    const missingInFundCount = allUnmatchedBank.length;
 
     const byTag: Record<string, number> = {};
     for (const r of allResults) {
