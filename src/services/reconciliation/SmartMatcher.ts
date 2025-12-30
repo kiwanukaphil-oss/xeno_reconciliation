@@ -84,6 +84,34 @@ interface FundSummary {
   status: 'MATCHED' | 'VARIANCE' | 'REVIEWED';
 }
 
+interface AccountFundSummary {
+  accountNumber: string;
+  clientName: string;
+  goalCount: number;
+  // Bank fund totals (NET)
+  bankXUMMF: number;
+  bankXUBF: number;
+  bankXUDEF: number;
+  bankXUREF: number;
+  bankTotal: number;
+  // Goal transaction fund totals (NET)
+  goalXUMMF: number;
+  goalXUBF: number;
+  goalXUDEF: number;
+  goalXUREF: number;
+  goalTotal: number;
+  // Variances
+  xummfVariance: number;
+  xubfVariance: number;
+  xudefVariance: number;
+  xurefVariance: number;
+  totalVariance: number;
+  // Status
+  status: 'MATCHED' | 'VARIANCE';
+  matchedGoalCount: number;
+  varianceGoalCount: number;
+}
+
 /**
  * Smart Matching Algorithm for Bank/Fund Reconciliation
  *
@@ -537,6 +565,202 @@ export class SmartMatcher {
         xurefVariance,
         totalVariance,
         status: hasAnyVariance ? 'VARIANCE' : 'MATCHED',
+      };
+    });
+
+    // Apply status filter if specified
+    let filteredResults = results;
+    if (filters?.status && filters.status !== 'ALL') {
+      filteredResults = results.filter(r => r.status === filters.status);
+    }
+
+    return {
+      data: filteredResults,
+      total: filteredResults.length,
+    };
+  }
+
+  /**
+   * Get account-level fund summary aggregating all goals within each account
+   * @param startDate - Start date as YYYY-MM-DD string
+   * @param endDate - End date as YYYY-MM-DD string
+   * @param filters - Optional filters for accountNumber, clientSearch, status
+   */
+  static async getAccountFundSummary(
+    startDate: string,
+    endDate: string,
+    filters?: {
+      accountNumber?: string;
+      clientSearch?: string;
+      status?: 'ALL' | 'MATCHED' | 'VARIANCE';
+    }
+  ): Promise<{ data: AccountFundSummary[]; total: number }> {
+    const conditions: string[] = [];
+    const params: any[] = [startDate, endDate];
+    let paramIndex = 3;
+
+    // Build optional filters
+    if (filters?.accountNumber) {
+      conditions.push(`a."accountNumber" ILIKE $${paramIndex}`);
+      params.push(`%${filters.accountNumber}%`);
+      paramIndex++;
+    }
+
+    if (filters?.clientSearch) {
+      conditions.push(`c."clientName" ILIKE $${paramIndex}`);
+      params.push(`%${filters.clientSearch}%`);
+      paramIndex++;
+    }
+
+    const filterClause = conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '';
+
+    // Query to aggregate bank and goal transactions by ACCOUNT (summing all goals)
+    const query = `
+      WITH bank_fund_summary AS (
+        SELECT
+          b."goalNumber",
+          SUM(b."xummfAmount") as xummf,
+          SUM(b."xubfAmount") as xubf,
+          SUM(b."xudefAmount") as xudef,
+          SUM(b."xurefAmount") as xuref,
+          SUM(b."totalAmount") as total
+        FROM bank_goal_transactions b
+        WHERE b."transactionDate"::date >= $1::date AND b."transactionDate"::date <= $2::date
+          AND (b."transactionId" IS NULL OR (b."transactionId" NOT LIKE '%Transfer_Reversal%' AND b."transactionId" != 'RT Change'))
+        GROUP BY b."goalNumber"
+      ),
+      goal_fund_summary AS (
+        SELECT
+          g."goalNumber",
+          SUM(f."amount") FILTER (WHERE fund."fundCode" = 'XUMMF') as xummf,
+          SUM(f."amount") FILTER (WHERE fund."fundCode" = 'XUBF') as xubf,
+          SUM(f."amount") FILTER (WHERE fund."fundCode" = 'XUDEF') as xudef,
+          SUM(f."amount") FILTER (WHERE fund."fundCode" = 'XUREF') as xuref,
+          SUM(f."amount") as total
+        FROM fund_transactions f
+        JOIN goals g ON f."goalId" = g."id"
+        JOIN funds fund ON f."fundId" = fund."id"
+        WHERE f."transactionDate"::date >= $1::date AND f."transactionDate"::date <= $2::date
+          AND (f."source" IS NULL OR f."source" != 'Transfer_Reversal')
+        GROUP BY g."goalNumber"
+      ),
+      goal_info AS (
+        SELECT DISTINCT
+          g."goalNumber",
+          c."clientName",
+          a."accountNumber"
+        FROM goals g
+        JOIN accounts a ON g."accountId" = a."id"
+        JOIN clients c ON a."clientId" = c."id"
+        WHERE 1=1 ${filterClause}
+      ),
+      goal_level AS (
+        SELECT
+          gi."goalNumber",
+          gi."clientName",
+          gi."accountNumber",
+          COALESCE(bfs.xummf, 0)::float as "bankXUMMF",
+          COALESCE(bfs.xubf, 0)::float as "bankXUBF",
+          COALESCE(bfs.xudef, 0)::float as "bankXUDEF",
+          COALESCE(bfs.xuref, 0)::float as "bankXUREF",
+          COALESCE(bfs.total, 0)::float as "bankTotal",
+          COALESCE(gfs.xummf, 0)::float as "goalXUMMF",
+          COALESCE(gfs.xubf, 0)::float as "goalXUBF",
+          COALESCE(gfs.xudef, 0)::float as "goalXUDEF",
+          COALESCE(gfs.xuref, 0)::float as "goalXUREF",
+          COALESCE(gfs.total, 0)::float as "goalTotal"
+        FROM goal_info gi
+        LEFT JOIN bank_fund_summary bfs ON bfs."goalNumber" = gi."goalNumber"
+        LEFT JOIN goal_fund_summary gfs ON gfs."goalNumber" = gi."goalNumber"
+        WHERE (bfs.total IS NOT NULL OR gfs.total IS NOT NULL)
+      ),
+      goal_with_status AS (
+        SELECT
+          *,
+          -- Calculate variances
+          ("bankXUMMF" - "goalXUMMF") as xummf_var,
+          ("bankXUBF" - "goalXUBF") as xubf_var,
+          ("bankXUDEF" - "goalXUDEF") as xudef_var,
+          ("bankXUREF" - "goalXUREF") as xuref_var,
+          -- Check if goal has variance (any fund variance exceeds tolerance: max(1% of goalAmount, 1000))
+          CASE WHEN (
+            ABS("bankXUMMF" - "goalXUMMF") > GREATEST(ABS("goalXUMMF") * 0.01, 1000) OR
+            ABS("bankXUBF" - "goalXUBF") > GREATEST(ABS("goalXUBF") * 0.01, 1000) OR
+            ABS("bankXUDEF" - "goalXUDEF") > GREATEST(ABS("goalXUDEF") * 0.01, 1000) OR
+            ABS("bankXUREF" - "goalXUREF") > GREATEST(ABS("goalXUREF") * 0.01, 1000)
+          ) THEN 1 ELSE 0 END as has_variance
+        FROM goal_level
+      )
+      SELECT
+        "accountNumber",
+        MAX("clientName") as "clientName",
+        COUNT(DISTINCT "goalNumber") as "goalCount",
+        SUM("bankXUMMF") as "bankXUMMF",
+        SUM("bankXUBF") as "bankXUBF",
+        SUM("bankXUDEF") as "bankXUDEF",
+        SUM("bankXUREF") as "bankXUREF",
+        SUM("bankTotal") as "bankTotal",
+        SUM("goalXUMMF") as "goalXUMMF",
+        SUM("goalXUBF") as "goalXUBF",
+        SUM("goalXUDEF") as "goalXUDEF",
+        SUM("goalXUREF") as "goalXUREF",
+        SUM("goalTotal") as "goalTotal",
+        SUM(CASE WHEN has_variance = 0 THEN 1 ELSE 0 END) as "matchedGoalCount",
+        SUM(CASE WHEN has_variance = 1 THEN 1 ELSE 0 END) as "varianceGoalCount"
+      FROM goal_with_status
+      GROUP BY "accountNumber"
+      ORDER BY "accountNumber"
+    `;
+
+    const rawResults = await prisma.$queryRawUnsafe(query, ...params) as any[];
+
+    // Process results and add calculated fields
+    // matchedGoalCount and varianceGoalCount are now computed in SQL
+    const results: AccountFundSummary[] = rawResults.map((row) => {
+      const xummfVariance = Number(row.bankXUMMF) - Number(row.goalXUMMF);
+      const xubfVariance = Number(row.bankXUBF) - Number(row.goalXUBF);
+      const xudefVariance = Number(row.bankXUDEF) - Number(row.goalXUDEF);
+      const xurefVariance = Number(row.bankXUREF) - Number(row.goalXUREF);
+      const totalVariance = Number(row.bankTotal) - Number(row.goalTotal);
+
+      // Check if any fund has a variance beyond tolerance at account level
+      const checkVariance = (goalAmount: number, variance: number): boolean => {
+        const tolerance = Math.max(Math.abs(goalAmount) * AMOUNT_TOLERANCE_PERCENT, AMOUNT_TOLERANCE_MIN);
+        return Math.abs(variance) > tolerance;
+      };
+
+      const hasXUMMFVariance = checkVariance(Number(row.goalXUMMF), xummfVariance);
+      const hasXUBFVariance = checkVariance(Number(row.goalXUBF), xubfVariance);
+      const hasXUDEFVariance = checkVariance(Number(row.goalXUDEF), xudefVariance);
+      const hasXUREFVariance = checkVariance(Number(row.goalXUREF), xurefVariance);
+      const hasAnyVariance = hasXUMMFVariance || hasXUBFVariance || hasXUDEFVariance || hasXUREFVariance;
+
+      // matchedGoalCount and varianceGoalCount come directly from SQL
+      const matchedGoalCount = Number(row.matchedGoalCount) || 0;
+      const varianceGoalCount = Number(row.varianceGoalCount) || 0;
+
+      return {
+        accountNumber: row.accountNumber,
+        clientName: row.clientName,
+        goalCount: Number(row.goalCount),
+        bankXUMMF: Number(row.bankXUMMF),
+        bankXUBF: Number(row.bankXUBF),
+        bankXUDEF: Number(row.bankXUDEF),
+        bankXUREF: Number(row.bankXUREF),
+        bankTotal: Number(row.bankTotal),
+        goalXUMMF: Number(row.goalXUMMF),
+        goalXUBF: Number(row.goalXUBF),
+        goalXUDEF: Number(row.goalXUDEF),
+        goalXUREF: Number(row.goalXUREF),
+        goalTotal: Number(row.goalTotal),
+        xummfVariance,
+        xubfVariance,
+        xudefVariance,
+        xurefVariance,
+        totalVariance,
+        status: hasAnyVariance ? 'VARIANCE' : 'MATCHED',
+        matchedGoalCount,
+        varianceGoalCount,
       };
     });
 

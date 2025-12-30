@@ -33,6 +33,7 @@ import { UnitRegistry } from "./components/unit-registry/UnitRegistry";
 import VarianceReview from "./components/reconciliation/VarianceReview";
 import TransactionComparison from "./components/comparison/TransactionComparison";
 import GoalComparison from "./components/comparison/GoalComparison";
+import FundComparison from "./components/comparison/FundComparison";
 
 const App = () => {
   const [activeModule, setActiveModule] = useState("dashboard");
@@ -68,6 +69,12 @@ const App = () => {
       name: "Goal Comparison",
       icon: Target,
       description: "Compare totals by goal with smart matching",
+    },
+    {
+      id: "fund-comparison",
+      name: "Fund Comparison",
+      icon: BarChart3,
+      description: "Compare fund-level variances by goal",
     },
     {
       id: "transaction-comparison",
@@ -131,6 +138,8 @@ const App = () => {
         return <VarianceReview />;
       case "goal-comparison":
         return <GoalComparison />;
+      case "fund-comparison":
+        return <FundComparison />;
       case "transaction-comparison":
         return <TransactionComparison />;
       case "fund-prices":

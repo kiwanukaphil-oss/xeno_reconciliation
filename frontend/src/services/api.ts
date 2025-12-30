@@ -715,6 +715,96 @@ export const exportFundComparisonCSV = async (params: {
   window.URL.revokeObjectURL(url);
 };
 
+// =============================================================================
+// Account-Level Fund Comparison APIs
+// =============================================================================
+
+export interface AccountFundComparisonRow {
+  accountNumber: string;
+  clientName: string;
+  goalCount: number;
+  bankXUMMF: number;
+  bankXUBF: number;
+  bankXUDEF: number;
+  bankXUREF: number;
+  bankTotal: number;
+  goalXUMMF: number;
+  goalXUBF: number;
+  goalXUDEF: number;
+  goalXUREF: number;
+  goalTotal: number;
+  xummfVariance: number;
+  xubfVariance: number;
+  xudefVariance: number;
+  xurefVariance: number;
+  totalVariance: number;
+  status: 'MATCHED' | 'VARIANCE';
+  matchedGoalCount: number;
+  varianceGoalCount: number;
+}
+
+export interface AccountFundComparisonAggregates {
+  totalBankXUMMF: number;
+  totalGoalXUMMF: number;
+  xummfVariance: number;
+  totalBankXUBF: number;
+  totalGoalXUBF: number;
+  xubfVariance: number;
+  totalBankXUDEF: number;
+  totalGoalXUDEF: number;
+  xudefVariance: number;
+  totalBankXUREF: number;
+  totalGoalXUREF: number;
+  xurefVariance: number;
+  totalBankAmount: number;
+  totalGoalAmount: number;
+  totalVariance: number;
+  matchedCount: number;
+  varianceCount: number;
+  matchRate: number;
+  totalGoalCount: number;
+  totalMatchedGoalCount: number;
+  totalVarianceGoalCount: number;
+}
+
+export interface AccountFundComparisonResponse {
+  success: boolean;
+  data: AccountFundComparisonRow[];
+  aggregates: AccountFundComparisonAggregates;
+  pagination: {
+    page: number;
+    limit: number;
+    total: number;
+    totalPages: number;
+  };
+  dateRange: {
+    startDate: string;
+    endDate: string;
+  };
+}
+
+export const fetchAccountFundComparison = async (params: {
+  startDate?: string;
+  endDate?: string;
+  accountNumber?: string;
+  clientSearch?: string;
+  status?: string;
+  page?: number;
+  limit?: number;
+}): Promise<AccountFundComparisonResponse> => {
+  const queryParams = new URLSearchParams();
+  if (params.startDate) queryParams.append("startDate", params.startDate);
+  if (params.endDate) queryParams.append("endDate", params.endDate);
+  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
+  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.status) queryParams.append("status", params.status);
+  if (params.page) queryParams.append("page", params.page.toString());
+  if (params.limit) queryParams.append("limit", params.limit.toString());
+
+  const response = await fetch(`${API_URL}/api/goal-comparison/fund-summary/by-account?${queryParams}`);
+  return handleResponse(response);
+};
+
 // ============================================================================
 // VARIANCE REVIEW API
 // ============================================================================

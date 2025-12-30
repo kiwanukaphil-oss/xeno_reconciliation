@@ -304,6 +304,121 @@ router.get('/fund-summary', async (req: Request, res: Response, next: NextFuncti
 });
 
 /**
+ * Get account-level fund comparison summary
+ * GET /api/goal-comparison/fund-summary/by-account
+ *
+ * Aggregates fund variances by account number (summing all goals within each account)
+ * Returns account-level summary with goal counts and matched/variance breakdowns
+ */
+router.get('/fund-summary/by-account', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    const startDate = req.query.startDate as string;
+    const endDate = req.query.endDate as string;
+    const accountNumber = req.query.accountNumber as string;
+    const clientSearch = req.query.clientSearch as string;
+    const status = req.query.status as 'ALL' | 'MATCHED' | 'VARIANCE';
+    const page = parseInt(req.query.page as string) || 1;
+    const limit = parseInt(req.query.limit as string) || 50;
+
+    // Default to last 30 days if no dates provided
+    const endDateStr = endDate || new Date().toISOString().split('T')[0];
+    const startDateStr = startDate || new Date(new Date(endDateStr).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
+
+    logger.info('Fetching account-level fund comparison summary', {
+      startDate: startDateStr,
+      endDate: endDateStr,
+      filters: { accountNumber, clientSearch, status },
+    });
+
+    const result = await SmartMatcher.getAccountFundSummary(startDateStr, endDateStr, {
+      accountNumber,
+      clientSearch,
+      status,
+    });
+
+    // Apply pagination
+    const skip = (page - 1) * limit;
+    const paginatedData = result.data.slice(skip, skip + limit);
+
+    // Calculate overall aggregates
+    let totalBankXUMMF = 0;
+    let totalBankXUBF = 0;
+    let totalBankXUDEF = 0;
+    let totalBankXUREF = 0;
+    let totalBankAmount = 0;
+    let totalGoalXUMMF = 0;
+    let totalGoalXUBF = 0;
+    let totalGoalXUDEF = 0;
+    let totalGoalXUREF = 0;
+    let totalGoalAmount = 0;
+    let matchedCount = 0;
+    let varianceCount = 0;
+    let totalGoalCount = 0;
+    let totalMatchedGoalCount = 0;
+    let totalVarianceGoalCount = 0;
+
+    for (const row of result.data) {
+      totalBankXUMMF += row.bankXUMMF;
+      totalBankXUBF += row.bankXUBF;
+      totalBankXUDEF += row.bankXUDEF;
+      totalBankXUREF += row.bankXUREF;
+      totalBankAmount += row.bankTotal;
+      totalGoalXUMMF += row.goalXUMMF;
+      totalGoalXUBF += row.goalXUBF;
+      totalGoalXUDEF += row.goalXUDEF;
+      totalGoalXUREF += row.goalXUREF;
+      totalGoalAmount += row.goalTotal;
+      totalGoalCount += row.goalCount;
+      totalMatchedGoalCount += row.matchedGoalCount;
+      totalVarianceGoalCount += row.varianceGoalCount;
+      if (row.status === 'MATCHED') matchedCount++;
+      else varianceCount++;
+    }
+
+    res.json({
+      success: true,
+      data: paginatedData,
+      aggregates: {
+        totalBankXUMMF,
+        totalGoalXUMMF,
+        xummfVariance: totalBankXUMMF - totalGoalXUMMF,
+        totalBankXUBF,
+        totalGoalXUBF,
+        xubfVariance: totalBankXUBF - totalGoalXUBF,
+        totalBankXUDEF,
+        totalGoalXUDEF,
+        xudefVariance: totalBankXUDEF - totalGoalXUDEF,
+        totalBankXUREF,
+        totalGoalXUREF,
+        xurefVariance: totalBankXUREF - totalGoalXUREF,
+        totalBankAmount,
+        totalGoalAmount,
+        totalVariance: totalBankAmount - totalGoalAmount,
+        matchedCount,
+        varianceCount,
+        matchRate: result.total > 0 ? Math.round((matchedCount / result.total) * 10000) / 100 : 0,
+        totalGoalCount,
+        totalMatchedGoalCount,
+        totalVarianceGoalCount,
+      },
+      pagination: {
+        page,
+        limit,
+        total: result.total,
+        totalPages: Math.ceil(result.total / limit),
+      },
+      dateRange: {
+        startDate: startDateStr,
+        endDate: endDateStr,
+      },
+    });
+  } catch (error) {
+    logger.error('Error fetching account-level fund comparison:', error);
+    next(error);
+  }
+});
+
+/**
  * Export fund comparison summary as CSV
  * GET /api/goal-comparison/fund-summary/export/csv
  */
