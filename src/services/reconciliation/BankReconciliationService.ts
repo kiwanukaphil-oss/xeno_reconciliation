@@ -441,7 +441,7 @@ export class BankReconciliationService {
           const matchResult = await this.matcher.matchTransaction(transaction);
 
           // Save bank goal transaction
-          const bankGoalTransaction = await prisma.bankGoalTransaction.create({
+          await prisma.bankGoalTransaction.create({
             data: {
               clientId: transaction.clientId,
               accountId: transaction.accountId,
@@ -470,31 +470,6 @@ export class BankReconciliationService {
               rowNumber: transaction.rowNumber,
             },
           });
-
-          // Save variances in bulk if there are many
-          if (matchResult.variances.length > 0) {
-            await prisma.reconciliationVariance.createMany({
-              data: matchResult.variances.map((variance) => ({
-                bankGoalTransactionId: bankGoalTransaction.id,
-                varianceType: variance.type,
-                varianceSeverity: variance.severity,
-                description: variance.description,
-                expectedValue: variance.expectedValue,
-                actualValue: variance.actualValue,
-                differenceAmount: variance.differenceAmount,
-                differencePercentage: variance.differencePercentage,
-                fundCode: variance.fundCode,
-                fundExpectedAmount: variance.fundExpectedAmount,
-                fundActualAmount: variance.fundActualAmount,
-                expectedDate: variance.expectedDate,
-                actualDate: variance.actualDate,
-                dateDifferenceDays: variance.dateDifferenceDays,
-                autoApproved: variance.autoApproved,
-                autoApprovalReason: variance.autoApprovalReason,
-                resolutionStatus: variance.autoApproved ? 'AUTO_APPROVED' : 'PENDING',
-              })),
-            });
-          }
 
           processedRecords++;
           if (matchResult.matched) totalMatched++;
@@ -607,11 +582,7 @@ export class BankReconciliationService {
     const batch = await prisma.bankUploadBatch.findUnique({
       where: { id: batchId },
       include: {
-        bankGoalTransactions: {
-          include: {
-            variances: true,
-          },
-        },
+        bankGoalTransactions: true,
       },
     });
 
@@ -644,7 +615,6 @@ export class BankReconciliationService {
         totalAmount: t.totalAmount,
         reconciliationStatus: t.reconciliationStatus,
         matchScore: t.matchScore,
-        varianceCount: t.variances.length,
       })),
     };
   }
@@ -661,7 +631,6 @@ export class BankReconciliationService {
             client: true,
             account: true,
             goal: true,
-            variances: true,
           },
         },
       },
@@ -698,13 +667,6 @@ export class BankReconciliationService {
         status: t.reconciliationStatus,
         matchScore: t.matchScore,
         matchedCode: t.matchedGoalTransactionCode,
-        variances: t.variances.map((v) => ({
-          type: v.varianceType,
-          severity: v.varianceSeverity,
-          description: v.description,
-          difference: v.differenceAmount,
-          autoApproved: v.autoApproved,
-        })),
       })),
     };
   }

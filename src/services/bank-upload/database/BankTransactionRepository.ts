@@ -1,6 +1,6 @@
 import { prisma } from '../../../config/database';
 import { logger } from '../../../config/logger';
-import { Prisma, ReconciliationStatus, VarianceType, VarianceSeverity } from '@prisma/client';
+import { Prisma, ReconciliationStatus } from '@prisma/client';
 import { ParsedBankTransaction, InvalidBankTransaction } from '../../../types/bankTransaction';
 
 /**
@@ -353,12 +353,6 @@ export class BankTransactionRepository {
         reconciliationStatus: status as any,
         updatedAt: new Date(),
       },
-      include: {
-        client: { select: { clientName: true } },
-        account: { select: { accountNumber: true } },
-        goal: { select: { goalNumber: true, goalTitle: true } },
-        variances: true,
-      },
     });
 
     logger.info(`Transaction ${transactionId} status updated to ${status} by ${updatedBy || 'system'}`);
@@ -417,7 +411,6 @@ export class BankTransactionRepository {
         client: { select: { clientName: true } },
         account: { select: { accountNumber: true } },
         goal: { select: { goalNumber: true, goalTitle: true } },
-        variances: true,
       },
     });
 
@@ -449,15 +442,6 @@ export class BankTransactionRepository {
       matchedGoalTransactionCode: transaction.matchedGoalTransactionCode,
       matchScore: transaction.matchScore,
       uploadBatchId: transaction.uploadBatchId,
-      variances: transaction.variances.map((v) => ({
-        id: v.id,
-        type: v.varianceType,
-        severity: v.varianceSeverity,
-        description: v.description,
-        differenceAmount: v.differenceAmount?.toNumber(),
-        resolutionStatus: v.resolutionStatus,
-        autoApproved: v.autoApproved,
-      })),
       createdAt: transaction.createdAt,
       updatedAt: transaction.updatedAt,
     };
@@ -585,25 +569,6 @@ export class BankTransactionRepository {
                 matchedAt: new Date(),
                 matchScore: 50,
                 updatedAt: new Date(),
-              },
-            });
-
-            // Create variance record
-            // Cap percentage at 999.99 to avoid database overflow (field is precision 5, scale 2)
-            const rawPercentage = fundTotalAmount !== 0 ? ((bankTotalAmount - fundTotalAmount) / fundTotalAmount) * 100 : 0;
-            const cappedPercentage = Math.max(-999.99, Math.min(999.99, rawPercentage));
-
-            await prisma.reconciliationVariance.create({
-              data: {
-                bankGoalTransactionId: bankTxn.id,
-                varianceType: VarianceType.TOTAL_AMOUNT,
-                varianceSeverity: difference > 50000 ? VarianceSeverity.CRITICAL : difference > 10000 ? VarianceSeverity.HIGH : VarianceSeverity.MEDIUM,
-                description: `Total amount mismatch: Bank ${bankTotalAmount.toLocaleString()} vs Fund ${fundTotalAmount.toLocaleString()}`,
-                expectedValue: fundTotalAmount,
-                actualValue: bankTotalAmount,
-                differenceAmount: bankTotalAmount - fundTotalAmount,
-                differencePercentage: cappedPercentage,
-                resolutionStatus: 'PENDING',
               },
             });
 

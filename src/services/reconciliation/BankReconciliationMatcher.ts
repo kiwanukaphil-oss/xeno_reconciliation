@@ -1,13 +1,19 @@
-import { PrismaClient } from '@prisma/client';
+import { PrismaClient, ReconciliationStatus } from '@prisma/client';
 import { logger } from '../../config/logger';
 import { ParsedBankTransaction } from '../../types/bankTransaction';
-import {
-  VarianceType,
-  VarianceSeverity,
-  ReconciliationStatus,
-} from '@prisma/client';
 
 const prisma = new PrismaClient();
+
+// Local type definitions (previously from Prisma, now internal-only)
+type VarianceType =
+  | 'TOTAL_AMOUNT'
+  | 'FUND_DISTRIBUTION'
+  | 'FUND_AMOUNT'
+  | 'DATE_DIFFERENCE'
+  | 'MISSING_IN_BANK'
+  | 'MISSING_IN_FUND';
+
+type VarianceSeverity = 'LOW' | 'MEDIUM' | 'HIGH' | 'CRITICAL';
 
 /**
  * Matching result for a bank transaction
@@ -120,8 +126,8 @@ export class BankReconciliationMatcher {
           goalTransactionCode: null,
           variances: [
             {
-              type: VarianceType.MISSING_IN_FUND,
-              severity: VarianceSeverity.CRITICAL,
+              type: 'MISSING_IN_FUND',
+              severity: 'CRITICAL',
               description: `No matching fund transaction found for goal ${bankTransaction.goalNumber} and transaction ID ${bankTransaction.transactionId}`,
               autoApproved: false,
             },
@@ -156,7 +162,7 @@ export class BankReconciliationMatcher {
           goalTransactionCode,
           variances: [
             {
-              type: VarianceType.TOTAL_AMOUNT,
+              type: 'TOTAL_AMOUNT',
               severity: this.calculateAmountSeverity(
                 Math.abs(bankTransaction.totalAmount - fundTotalAmount)
               ),
@@ -228,8 +234,8 @@ export class BankReconciliationMatcher {
 
     if (dateDifference > 0 && dateDifference <= this.tolerance.dateDays) {
       variances.push({
-        type: VarianceType.DATE_DIFFERENCE,
-        severity: VarianceSeverity.LOW,
+        type: 'DATE_DIFFERENCE',
+        severity: 'LOW',
         description: `Transaction date differs by ${dateDifference} day(s)`,
         expectedDate: fundDate,
         actualDate: bankDate,
@@ -239,8 +245,8 @@ export class BankReconciliationMatcher {
       });
     } else if (dateDifference > this.tolerance.dateDays) {
       variances.push({
-        type: VarianceType.DATE_DIFFERENCE,
-        severity: VarianceSeverity.MEDIUM,
+        type: 'DATE_DIFFERENCE',
+        severity: 'MEDIUM',
         description: `Transaction date differs by ${dateDifference} day(s) - exceeds tolerance`,
         expectedDate: fundDate,
         actualDate: bankDate,
@@ -271,7 +277,7 @@ export class BankReconciliationMatcher {
       if (percentageDiff > this.tolerance.fundDistributionPercentage) {
         const severity = this.calculateAmountSeverity(difference);
         variances.push({
-          type: VarianceType.FUND_AMOUNT,
+          type: 'FUND_AMOUNT',
           severity,
           description: `${fundCode} amount variance`,
           fundCode,
@@ -280,10 +286,10 @@ export class BankReconciliationMatcher {
           differenceAmount: bankAmount - fundAmount,
           differencePercentage: percentageDiff * 100,
           autoApproved:
-            severity === VarianceSeverity.LOW &&
+            severity === 'LOW' &&
             percentageDiff <= this.tolerance.fundDistributionPercentage * 2,
           autoApprovalReason:
-            severity === VarianceSeverity.LOW
+            severity === 'LOW'
               ? 'Small variance within acceptable tolerance'
               : undefined,
         });
@@ -312,13 +318,13 @@ export class BankReconciliationMatcher {
     const absDiff = Math.abs(difference);
 
     if (absDiff < this.tolerance.severityThresholds.low) {
-      return VarianceSeverity.LOW;
+      return 'LOW';
     } else if (absDiff < this.tolerance.severityThresholds.medium) {
-      return VarianceSeverity.MEDIUM;
+      return 'MEDIUM';
     } else if (absDiff < this.tolerance.severityThresholds.high) {
-      return VarianceSeverity.HIGH;
+      return 'HIGH';
     } else {
-      return VarianceSeverity.CRITICAL;
+      return 'CRITICAL';
     }
   }
 
@@ -339,8 +345,8 @@ export class BankReconciliationMatcher {
     // Check for critical or high severity variances
     const hasCritical = variances.some(
       (v) =>
-        v.severity === VarianceSeverity.CRITICAL ||
-        v.severity === VarianceSeverity.HIGH
+        v.severity === 'CRITICAL' ||
+        v.severity === 'HIGH'
     );
 
     if (hasCritical) {
@@ -372,16 +378,16 @@ export class BankReconciliationMatcher {
 
     for (const variance of variances) {
       switch (variance.severity) {
-        case VarianceSeverity.LOW:
+        case 'LOW':
           score -= 5;
           break;
-        case VarianceSeverity.MEDIUM:
+        case 'MEDIUM':
           score -= 15;
           break;
-        case VarianceSeverity.HIGH:
+        case 'HIGH':
           score -= 30;
           break;
-        case VarianceSeverity.CRITICAL:
+        case 'CRITICAL':
           score -= 50;
           break;
       }

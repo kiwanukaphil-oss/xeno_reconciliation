@@ -244,40 +244,6 @@ export const getBankBatchSummary = async (batchId: string) => {
   return handleResponse(response);
 };
 
-export const getReconciliationVariances = async (
-  limit: number = 50,
-  offset: number = 0,
-  severity?: string,
-  status?: string
-) => {
-  const params = new URLSearchParams();
-  params.append("limit", limit.toString());
-  params.append("offset", offset.toString());
-  if (severity) params.append("severity", severity);
-  if (status) params.append("status", status);
-
-  const response = await fetch(`${API_URL}/api/bank-reconciliation/variances?${params}`);
-  return handleResponse(response);
-};
-
-export const resolveVariance = async (
-  varianceId: string,
-  resolutionStatus: string,
-  resolutionNotes: string,
-  resolvedBy: string
-) => {
-  const response = await fetch(`${API_URL}/api/bank-reconciliation/variances/${varianceId}/resolve`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({
-      resolutionStatus,
-      resolutionNotes,
-      resolvedBy,
-    }),
-  });
-  return handleResponse(response);
-};
-
 // =============================================================================
 // NEW Bank Upload APIs (mirrors Fund Upload pattern)
 // =============================================================================

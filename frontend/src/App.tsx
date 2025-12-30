@@ -11,7 +11,6 @@ import {
   Users,
   DollarSign,
   Wallet,
-  AlertTriangle,
   Building2,
   Scale,
   Target,
@@ -30,7 +29,6 @@ import BankTransactions from "./components/transactions/BankTransactions";
 import ApprovalQueue from "./components/approval/ApprovalQueue";
 import { FundPrices } from "./components/fund-price/FundPrices";
 import { UnitRegistry } from "./components/unit-registry/UnitRegistry";
-import VarianceReview from "./components/reconciliation/VarianceReview";
 import TransactionComparison from "./components/comparison/TransactionComparison";
 import GoalComparison from "./components/comparison/GoalComparison";
 import FundComparison from "./components/comparison/FundComparison";
@@ -57,12 +55,6 @@ const App = () => {
       name: "Bank Upload",
       icon: Building2,
       description: "Upload bank transaction files",
-    },
-    {
-      id: "variance-review",
-      name: "Variance Review",
-      icon: AlertTriangle,
-      description: "Review and resolve variances",
     },
     {
       id: "goal-comparison",
@@ -134,8 +126,6 @@ const App = () => {
         return <FundUpload />;
       case "bank-upload":
         return <BankUpload />;
-      case "variance-review":
-        return <VarianceReview />;
       case "goal-comparison":
         return <GoalComparison />;
       case "fund-comparison":
