@@ -9,6 +9,11 @@ import {
   RawFundTransactionRow,
   ParsedFundTransaction,
 } from '../../../types/fundTransaction';
+import { TransactionType, TransactionSource } from '@prisma/client';
+
+// Valid enum values for type checking
+const VALID_TRANSACTION_TYPES: string[] = Object.values(TransactionType);
+const VALID_TRANSACTION_SOURCES: string[] = Object.values(TransactionSource);
 
 export class FundCSVParser {
   /**
@@ -107,7 +112,7 @@ export class FundCSVParser {
       const accountNumber = StringUtils.clean(row.accountNumber);
       const goalNumber = StringUtils.clean(row.goalNumber);
       const goalTitle = StringUtils.clean(row.goalTitle);
-      const transactionType = StringUtils.clean(row.transactionType).toUpperCase();
+      const transactionTypeStr = StringUtils.clean(row.transactionType).toUpperCase();
       const accountType = StringUtils.clean(row.accountType).toUpperCase();
       const accountCategory = StringUtils.clean(row.accountCategory).toUpperCase();
       const sponsorCode = StringUtils.clean(row.sponsorCode); // Optional
@@ -116,7 +121,17 @@ export class FundCSVParser {
       // DO NOT skip rows here - let the validator handle missing fields
       // so we get proper error reporting instead of silent rejection
       const transactionId = StringUtils.clean(row.transactionId) || '';
-      const source = StringUtils.clean(row.source) || '';
+      const sourceStr = StringUtils.clean(row.source) || '';
+
+      // Convert string to TransactionType enum (validation handles invalid values)
+      const transactionType = VALID_TRANSACTION_TYPES.includes(transactionTypeStr)
+        ? (transactionTypeStr as TransactionType)
+        : (transactionTypeStr as TransactionType); // Keep raw value, validator will catch invalid
+
+      // Convert string to TransactionSource enum (nullable)
+      const source = sourceStr && VALID_TRANSACTION_SOURCES.includes(sourceStr)
+        ? (sourceStr as TransactionSource)
+        : null;
 
       // Generate goalTransactionCode (includes transactionId and source to distinguish transactions)
       // - transactionId: Handles multiple transactions same day (e.g., regular vs reversal)
@@ -126,7 +141,7 @@ export class FundCSVParser {
         accountNumber,
         goalNumber,
         transactionId,
-        source
+        sourceStr // Use string version for code generation
       );
 
       return {

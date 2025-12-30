@@ -2,6 +2,10 @@ import XLSX from 'xlsx';
 import { logger } from '../../../config/logger';
 import { ParsedBankTransaction } from '../../../types/bankTransaction';
 import { BankCSVParser } from './BankCSVParser';
+import { TransactionType } from '@prisma/client';
+
+// Valid enum values for type checking
+const VALID_TRANSACTION_TYPES: string[] = Object.values(TransactionType);
 
 /**
  * Parses Excel files (.xlsx, .xls) containing bank transactions
@@ -108,8 +112,13 @@ export class BankExcelParser {
       const accountNumber = this.cleanString(row['Acc Number'] || row['acc number'] || '');
       const goalTitle = this.cleanString(row['Goal Name'] || row['goal name'] || '');
       const goalNumber = this.cleanString(row['Goal Number'] || row['goal number'] || '');
-      const transactionType = this.cleanString(row['Transaction Type'] || row['transaction type'] || '').toUpperCase();
+      const transactionTypeStr = this.cleanString(row['Transaction Type'] || row['transaction type'] || '').toUpperCase();
       const transactionId = this.cleanString(row['Transaction ID'] || row['transaction id'] || '');
+
+      // Convert string to TransactionType enum (validation handles invalid values)
+      const transactionType = VALID_TRANSACTION_TYPES.includes(transactionTypeStr)
+        ? (transactionTypeStr as TransactionType)
+        : (transactionTypeStr as TransactionType); // Keep raw value, validator will catch invalid
 
       // Parse total amount
       const totalAmount = BankCSVParser.parseAmount(row['Total Amount'] || row['total amount']);

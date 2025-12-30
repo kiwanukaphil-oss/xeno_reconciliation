@@ -1,3 +1,5 @@
+import { TransactionType } from '@prisma/client';
+
 /**
  * Raw bank transaction row from CSV
  * Matches the format: Date,First Name,Last Name,Acc Number,Goal Name,Goal Number,
@@ -47,7 +49,7 @@ export interface ParsedBankTransaction {
 
   // Transaction details
   transactionDate: Date;
-  transactionType: string;
+  transactionType: TransactionType;
   transactionId: string;
   totalAmount: number;
 

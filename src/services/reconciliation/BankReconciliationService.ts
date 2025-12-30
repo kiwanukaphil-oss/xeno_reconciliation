@@ -1,11 +1,16 @@
-import { PrismaClient, ProcessingStatus, ValidationStatus } from '@prisma/client';
+import { ProcessingStatus, ValidationStatus } from '@prisma/client';
+import { prisma } from '../../config/database';
 import { logger } from '../../config/logger';
 import { BankCSVParser } from './BankCSVParser';
 import { BankReconciliationMatcher } from './BankReconciliationMatcher';
-import { ParsedBankTransaction, ValidatedBankTransaction } from '../../types/bankTransaction';
+import { ParsedBankTransaction, ValidatedBankTransaction, ValidationError } from '../../types/bankTransaction';
 import fs from 'fs/promises';
 
-const prisma = new PrismaClient();
+// Type for batch metadata JSON field
+interface BatchMetadata {
+  progress?: number;
+  [key: string]: unknown;
+}
 
 /**
  * Result of bank upload queue operation (immediate response)
@@ -169,7 +174,7 @@ export class BankReconciliationService {
               goalId: goal.id,
               uploadBatchId: batchId,
               transactionDate: transaction.transactionDate,
-              transactionType: transaction.transactionType as any,
+              transactionType: transaction.transactionType,
               transactionId: transaction.transactionId,
               firstName: transaction.firstName,
               lastName: transaction.lastName,
@@ -448,7 +453,7 @@ export class BankReconciliationService {
               goalId: transaction.goalId,
               uploadBatchId: batchId,
               transactionDate: transaction.transactionDate,
-              transactionType: transaction.transactionType as any,
+              transactionType: transaction.transactionType,
               transactionId: transaction.transactionId,
               firstName: transaction.firstName,
               lastName: transaction.lastName,
@@ -525,7 +530,7 @@ export class BankReconciliationService {
       throw new Error(`Batch not found: ${batchId}`);
     }
 
-    const metadata = (batch.metadata as any) || {};
+    const metadata = (batch.metadata as BatchMetadata) || {};
     const progress = batch.totalRecords > 0
       ? Math.round((batch.processedRecords / batch.totalRecords) * 100)
       : 0;
@@ -540,7 +545,7 @@ export class BankReconciliationService {
       failedRecords: batch.failedRecords,
       totalMatched: batch.totalMatched,
       totalUnmatched: batch.totalUnmatched,
-      errors: (batch.validationErrors as any[]) || [],
+      errors: (batch.validationErrors as ValidationError[] | null) || [],
     };
   }
 

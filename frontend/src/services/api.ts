@@ -498,63 +498,6 @@ export const exportGoalComparisonCSV = async (params: {
   window.URL.revokeObjectURL(url);
 };
 
-export interface SmartMatchingResult {
-  success: boolean;
-  message: string;
-  totalGoals: number;
-  processedGoals: number;
-  goalsInBatch: number;
-  goalsWithMatches: number;
-  hasMore: boolean;
-  nextOffset: number | null;
-  totalMatches: number;
-  totalUpdated: number;
-  matchBreakdown: {
-    exact: number;
-    amount: number;
-    split: number;
-  };
-  dateRange: {
-    startDate: string;
-    endDate: string;
-  };
-  results: { goalNumber: string; matches: number; updated: number }[];
-}
-
-export const runSmartMatching = async (params: {
-  startDate?: string;
-  endDate?: string;
-  applyUpdates?: boolean;
-  batchSize?: number;
-  offset?: number;
-}): Promise<SmartMatchingResult> => {
-  const response = await fetch(`${API_URL}/api/goal-comparison/run-matching`, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(params),
-  });
-  return handleResponse(response);
-};
-
-export const applyGoalMatches = async (
-  goalNumber: string,
-  params: {
-    startDate?: string;
-    endDate?: string;
-    transactionType?: string;
-  }
-) => {
-  const queryParams = new URLSearchParams();
-  if (params.startDate) queryParams.append("startDate", params.startDate);
-  if (params.endDate) queryParams.append("endDate", params.endDate);
-  if (params.transactionType) queryParams.append("transactionType", params.transactionType);
-
-  const response = await fetch(`${API_URL}/api/goal-comparison/${encodeURIComponent(goalNumber)}/apply-matches?${queryParams}`, {
-    method: "POST",
-  });
-  return handleResponse(response);
-};
-
 // =============================================================================
 // Fund Comparison APIs (Per-Fund NET Amounts)
 // =============================================================================

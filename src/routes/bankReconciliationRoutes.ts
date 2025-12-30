@@ -2,6 +2,7 @@ import { Router, Request, Response } from 'express';
 import multer from 'multer';
 import path from 'path';
 import fs from 'fs/promises';
+import { prisma } from '../config/database';
 import { BankReconciliationService } from '../services/reconciliation/BankReconciliationService';
 import { logger } from '../config/logger';
 
@@ -311,9 +312,6 @@ router.get('/batches/:batchId/report', async (req: Request, res: Response): Prom
  */
 router.get('/batches', async (req: Request, res: Response): Promise<void> => {
   try {
-    const { PrismaClient } = await import('@prisma/client');
-    const prisma = new PrismaClient();
-
     const limit = req.query.limit ? parseInt(req.query.limit as string) : 50;
     const offset = req.query.offset ? parseInt(req.query.offset as string) : 0;
 

@@ -13,7 +13,6 @@ import {
   ChevronDown,
   ChevronUp,
   RotateCcw,
-  Play,
   X,
   Tag,
   FileSpreadsheet,
@@ -24,7 +23,6 @@ import {
   fetchGoalComparison,
   fetchGoalTransactionsWithMatching,
   exportGoalComparisonCSV,
-  runSmartMatching,
   fetchFundComparison,
   exportFundComparisonCSV,
   fetchVarianceTransactions,
@@ -40,7 +38,6 @@ import {
   detectResolvedVariances,
 } from "../../services/api";
 import type {
-  SmartMatchingResult,
   FundComparisonRow,
   FundComparisonAggregates,
   VarianceTransaction,
@@ -198,7 +195,6 @@ const GoalComparison = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
-  const [runningMatching, setRunningMatching] = useState(false);
   const [detectingResolutions, setDetectingResolutions] = useState(false);
 
   // Filter state
@@ -230,11 +226,6 @@ const GoalComparison = () => {
   const [manualMatching, setManualMatching] = useState(false);
   const [unmatchingId, setUnmatchingId] = useState<string | null>(null); // Track which transaction is being unmatched
 
-  // Smart matching batch processing state
-  const [batchSize, setBatchSize] = useState(100);
-  const [matchingResult, setMatchingResult] = useState<SmartMatchingResult | null>(null);
-  const [showMatchingResult, setShowMatchingResult] = useState(false);
-  const [, setCurrentOffset] = useState(0);
 
   // Reversal linking state
   const [reversalSearchTxn, setReversalSearchTxn] = useState<{id: string; amount: number; transactionType: string} | null>(null);
@@ -724,38 +715,6 @@ const GoalComparison = () => {
     }
   };
 
-  const handleRunMatching = async (offset: number = 0) => {
-    // Only show confirm on first batch
-    if (offset === 0 && !confirm("This will run smart matching on goals in the selected date range. Continue?")) {
-      return;
-    }
-    setRunningMatching(true);
-    setCurrentOffset(offset);
-    try {
-      const result = await runSmartMatching({
-        startDate: startDate || undefined,
-        endDate: endDate || undefined,
-        applyUpdates: true,
-        batchSize,
-        offset,
-      });
-      setMatchingResult(result);
-      setShowMatchingResult(true);
-      fetchData(pagination.page);
-    } catch (err) {
-      alert("Failed to run matching: " + (err as Error).message);
-    } finally {
-      setRunningMatching(false);
-    }
-  };
-
-  const handleContinueMatching = () => {
-    if (matchingResult?.nextOffset) {
-      setShowMatchingResult(false);
-      handleRunMatching(matchingResult.nextOffset);
-    }
-  };
-
   const handlePageChange = (newPage: number) => {
     if (newPage >= 1 && newPage <= pagination.totalPages) {
       setExpandedGoal(null);
@@ -1112,32 +1071,6 @@ const GoalComparison = () => {
             <RotateCcw className="h-4 w-4 mr-2" />
             Reset
           </button>
-          {/* Batch Size Selector */}
-          <div className="flex items-center gap-1">
-            <select
-              value={batchSize}
-              onChange={(e) => setBatchSize(parseInt(e.target.value))}
-              className="px-2 py-2 border border-gray-300 rounded-lg text-sm focus:ring-2 focus:ring-purple-500 focus:border-transparent"
-              title="Goals per batch"
-            >
-              <option value={100}>100/batch</option>
-              <option value={500}>500/batch</option>
-              <option value={1000}>1K/batch</option>
-              <option value={5000}>5K/batch</option>
-            </select>
-            <button
-              onClick={() => handleRunMatching(0)}
-              disabled={runningMatching || data.length === 0}
-              className="inline-flex items-center px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400"
-            >
-              {runningMatching ? (
-                <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-              ) : (
-                <Play className="h-4 w-4 mr-2" />
-              )}
-              Run Smart Matching
-            </button>
-          </div>
           <button
             onClick={handleExport}
             disabled={exporting || (activeTab === 'goal' ? data.length === 0 : fundData.length === 0)}
@@ -2470,136 +2403,6 @@ const GoalComparison = () => {
           Click on a goal row to see detailed transaction matching.
         </p>
       </div>
-
-      {/* Smart Matching Results Modal */}
-      {showMatchingResult && matchingResult && (
-        <div className="fixed inset-0 z-50 overflow-y-auto">
-          <div className="flex items-center justify-center min-h-screen px-4 pt-4 pb-20 text-center sm:p-0">
-            {/* Backdrop */}
-            <div
-              className="fixed inset-0 transition-opacity bg-gray-500 bg-opacity-75"
-              onClick={() => setShowMatchingResult(false)}
-            />
-
-            {/* Modal */}
-            <div className="relative inline-block w-full max-w-lg p-6 overflow-hidden text-left align-middle transition-all transform bg-white shadow-xl rounded-2xl">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="text-lg font-semibold text-gray-900">
-                  Smart Matching Results
-                </h3>
-                <button
-                  onClick={() => setShowMatchingResult(false)}
-                  className="p-1 text-gray-400 hover:text-gray-600 rounded-full hover:bg-gray-100"
-                >
-                  <X className="h-5 w-5" />
-                </button>
-              </div>
-
-              <div className="space-y-4">
-                {/* Summary */}
-                <div className="p-3 bg-gray-100 rounded-lg text-center">
-                  <p className="text-sm text-gray-600">
-                    Goals Processed in This Batch (max {batchSize.toLocaleString()})
-                  </p>
-                  <p className="text-3xl font-bold text-gray-900">
-                    {matchingResult.goalsInBatch.toLocaleString()}
-                  </p>
-                  {matchingResult.hasMore && (
-                    <p className="text-sm text-orange-600 mt-1">
-                      {(matchingResult.totalGoals - matchingResult.processedGoals).toLocaleString()} goals remaining - click "Continue" to process more
-                    </p>
-                  )}
-                  {!matchingResult.hasMore && (
-                    <p className="text-sm text-green-600 mt-1">
-                      All {matchingResult.totalGoals.toLocaleString()} goals processed!
-                    </p>
-                  )}
-                </div>
-
-                {/* Progress Bar */}
-                <div className="w-full bg-gray-200 rounded-full h-2.5">
-                  <div
-                    className="bg-purple-600 h-2.5 rounded-full transition-all"
-                    style={{
-                      width: `${Math.round((matchingResult.processedGoals / matchingResult.totalGoals) * 100)}%`,
-                    }}
-                  ></div>
-                </div>
-                <p className="text-xs text-gray-500 text-center">
-                  {matchingResult.processedGoals.toLocaleString()} / {matchingResult.totalGoals.toLocaleString()} goals processed
-                </p>
-
-                {/* Results Grid */}
-                <div className="grid grid-cols-2 gap-3">
-                  <div className="p-3 bg-green-50 rounded-lg">
-                    <p className="text-sm font-medium text-green-700">Exact Matches</p>
-                    <p className="text-2xl font-bold text-green-700">
-                      {matchingResult.matchBreakdown.exact}
-                    </p>
-                    <p className="text-xs text-green-600 mt-1">Goal + Transaction ID match</p>
-                  </div>
-                  <div className="p-3 bg-blue-50 rounded-lg">
-                    <p className="text-sm font-medium text-blue-700">Amount Matches</p>
-                    <p className="text-2xl font-bold text-blue-700">
-                      {matchingResult.matchBreakdown.amount}
-                    </p>
-                    <p className="text-xs text-blue-600 mt-1">Amount within ±30 days</p>
-                  </div>
-                  <div className="p-3 bg-purple-50 rounded-lg">
-                    <p className="text-sm font-medium text-purple-700">Split Matches</p>
-                    <p className="text-2xl font-bold text-purple-700">
-                      {matchingResult.matchBreakdown.split}
-                    </p>
-                    <p className="text-xs text-purple-600 mt-1">N:1 or 1:N transactions</p>
-                  </div>
-                  <div className="p-3 bg-gray-50 rounded-lg">
-                    <p className="text-sm font-medium text-gray-700">Total Updated</p>
-                    <p className="text-2xl font-bold text-gray-700">
-                      {matchingResult.totalUpdated}
-                    </p>
-                    <p className="text-xs text-gray-600 mt-1">Transactions status updated</p>
-                  </div>
-                </div>
-
-                {/* Goals with matches */}
-                <div className="p-3 bg-gray-50 rounded-lg text-sm">
-                  <p className="font-medium text-gray-700 mb-1">Batch Summary:</p>
-                  <ul className="text-gray-600 list-disc list-inside space-y-1">
-                    <li>Goals with matches: {matchingResult.goalsWithMatches} / {matchingResult.goalsInBatch}</li>
-                    <li>Total matches found: {matchingResult.totalMatches}</li>
-                    <li>Date range: {matchingResult.dateRange.startDate} to {matchingResult.dateRange.endDate}</li>
-                  </ul>
-                </div>
-              </div>
-
-              <div className="mt-6 flex justify-end gap-3">
-                <button
-                  onClick={() => setShowMatchingResult(false)}
-                  className="px-4 py-2 bg-gray-200 text-gray-800 rounded-lg hover:bg-gray-300 transition-colors"
-                >
-                  Close
-                </button>
-                {matchingResult.hasMore && (
-                  <button
-                    onClick={handleContinueMatching}
-                    disabled={runningMatching}
-                    className="px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:bg-gray-400 transition-colors"
-                  >
-                    {runningMatching ? (
-                      <>
-                        <Loader2 className="h-4 w-4 mr-2 animate-spin inline" />
-                        Processing...
-                      </>
-                    ) : (
-                      `Continue (${(matchingResult.totalGoals - matchingResult.processedGoals).toLocaleString()} remaining)`
-                    )}
-                  </button>
-                )}
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Reversal Candidates Modal */}
       {showReversalModal && (

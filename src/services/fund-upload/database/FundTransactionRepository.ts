@@ -2,7 +2,10 @@ import { prisma } from '../../../config/database';
 import { logger } from '../../../config/logger';
 import { config } from '../../../config/env';
 import { ParsedFundTransaction, TransactionValidationError } from '../../../types/fundTransaction';
-import { Prisma } from '@prisma/client';
+import { Prisma, PrismaClient } from '@prisma/client';
+
+// Type for Prisma transaction client
+type TransactionClient = Omit<PrismaClient, '$connect' | '$disconnect' | '$on' | '$transaction' | '$use' | '$extends'>;
 
 /**
  * Manages fund transaction database operations
@@ -10,6 +13,7 @@ import { Prisma } from '@prisma/client';
 export class FundTransactionRepository {
   /**
    * Saves valid fund transactions to database in batches
+   * Uses a database transaction to ensure atomicity - all batches succeed or none do
    */
   static async saveTransactions(
     transactions: ParsedFundTransaction[],
@@ -18,38 +22,51 @@ export class FundTransactionRepository {
     logger.info(`Saving ${transactions.length} fund transactions to database`);
 
     const batchSize = config.processing.batchInsertSize;
-    let savedCount = 0;
 
-    // Process in batches for performance
-    for (let i = 0; i < transactions.length; i += batchSize) {
-      const batch = transactions.slice(i, i + batchSize);
+    // Wrap entire operation in a transaction for atomicity
+    const savedCount = await prisma.$transaction(
+      async (tx) => {
+        let count = 0;
 
-      try {
-        await this.saveBatch(batch, uploadBatchId);
-        savedCount += batch.length;
+        // Process in batches for performance
+        for (let i = 0; i < transactions.length; i += batchSize) {
+          const batch = transactions.slice(i, i + batchSize);
 
-        logger.info(
-          `Saved batch ${Math.floor(i / batchSize) + 1}: ${batch.length} transactions (${savedCount}/${transactions.length})`
-        );
-      } catch (error) {
-        logger.error(`Error saving batch starting at index ${i}:`, error);
-        throw error;
+          try {
+            await this.saveBatch(batch, uploadBatchId, tx);
+            count += batch.length;
+
+            logger.info(
+              `Saved batch ${Math.floor(i / batchSize) + 1}: ${batch.length} transactions (${count}/${transactions.length})`
+            );
+          } catch (error) {
+            logger.error(`Error saving batch starting at index ${i}:`, error);
+            throw error; // Transaction will be rolled back
+          }
+        }
+
+        return count;
+      },
+      {
+        maxWait: 30000, // 30 seconds max wait to acquire connection
+        timeout: 300000, // 5 minutes for the entire transaction (large uploads)
       }
-    }
+    );
 
     logger.info(`Successfully saved ${savedCount} fund transactions`);
     return savedCount;
   }
 
   /**
-   * Saves a batch of transactions (called internally)
+   * Saves a batch of transactions (called internally within transaction)
    */
   private static async saveBatch(
     transactions: ParsedFundTransaction[],
-    uploadBatchId: string
+    uploadBatchId: string,
+    tx: TransactionClient
   ): Promise<void> {
     // First, resolve all foreign keys (client, account, goal, fund)
-    const resolvedTransactions = await this.resolveForeignKeys(transactions);
+    const resolvedTransactions = await this.resolveForeignKeys(transactions, tx);
 
     // Create transaction records
     // Convert empty strings to null for nullable fields (transactionId, source)
@@ -57,7 +74,7 @@ export class FundTransactionRepository {
       fundTransactionId: txn.fundTransactionId,
       goalTransactionCode: txn.goalTransactionCode,
       transactionId: txn.transactionId || null, // Empty string -> null
-      source: (txn.source || null) as any, // Empty string -> null (nullable enum)
+      source: txn.source, // Already nullable TransactionSource type
       clientId: txn.clientId,
       accountId: txn.accountId,
       goalId: txn.goalId,
@@ -65,7 +82,7 @@ export class FundTransactionRepository {
       uploadBatchId,
       transactionDate: txn.transactionDate,
       dateCreated: txn.dateCreated,
-      transactionType: txn.transactionType as any,
+      transactionType: txn.transactionType,
       amount: new Prisma.Decimal(txn.amount),
       units: new Prisma.Decimal(txn.units),
       bidPrice: new Prisma.Decimal(txn.bidPrice),
@@ -76,7 +93,7 @@ export class FundTransactionRepository {
     }));
 
     // Batch insert
-    await prisma.fundTransaction.createMany({
+    await tx.fundTransaction.createMany({
       data: createData,
       skipDuplicates: true, // Skip if duplicate (uploadBatchId, rowNumber)
     });
@@ -86,7 +103,8 @@ export class FundTransactionRepository {
    * Resolves foreign keys for transactions
    */
   private static async resolveForeignKeys(
-    transactions: ParsedFundTransaction[]
+    transactions: ParsedFundTransaction[],
+    tx: TransactionClient
   ): Promise<
     Array<
       ParsedFundTransaction & {
@@ -103,21 +121,21 @@ export class FundTransactionRepository {
     const goalNumbers = [...new Set(transactions.map((t) => t.goalNumber))];
     const fundCodes = [...new Set(transactions.map((t) => t.fundCode))];
 
-    // Fetch all entities in parallel
+    // Fetch all entities in parallel using transaction client
     const [clients, accounts, goals, funds] = await Promise.all([
-      prisma.client.findMany({
+      tx.client.findMany({
         where: { clientName: { in: clientNames } },
         select: { id: true, clientName: true },
       }),
-      prisma.account.findMany({
+      tx.account.findMany({
         where: { accountNumber: { in: accountNumbers } },
         select: { id: true, accountNumber: true },
       }),
-      prisma.goal.findMany({
+      tx.goal.findMany({
         where: { goalNumber: { in: goalNumbers } },
         select: { id: true, goalNumber: true },
       }),
-      prisma.fund.findMany({
+      tx.fund.findMany({
         where: { fundCode: { in: fundCodes } },
         select: { id: true, fundCode: true },
       }),
@@ -157,6 +175,7 @@ export class FundTransactionRepository {
 
   /**
    * Saves invalid transactions for audit trail
+   * Uses a database transaction to ensure atomicity
    */
   static async saveInvalidTransactions(
     invalidTransactions: Array<{
@@ -172,25 +191,36 @@ export class FundTransactionRepository {
     }
 
     const batchSize = 1000;
-    let savedCount = 0;
 
-    for (let i = 0; i < invalidTransactions.length; i += batchSize) {
-      const batch = invalidTransactions.slice(i, i + batchSize);
+    const savedCount = await prisma.$transaction(
+      async (tx) => {
+        let count = 0;
 
-      const createData = batch.map((item) => ({
-        uploadBatchId,
-        rowNumber: item.transaction.rowNumber,
-        rawData: item.transaction as any,
-        validationErrors: item.errors as any,
-      }));
+        for (let i = 0; i < invalidTransactions.length; i += batchSize) {
+          const batch = invalidTransactions.slice(i, i + batchSize);
 
-      await prisma.invalidFundTransaction.createMany({
-        data: createData,
-        skipDuplicates: true,
-      });
+          const createData = batch.map((item) => ({
+            uploadBatchId,
+            rowNumber: item.transaction.rowNumber,
+            rawData: item.transaction as any,
+            validationErrors: item.errors as any,
+          }));
 
-      savedCount += batch.length;
-    }
+          await tx.invalidFundTransaction.createMany({
+            data: createData,
+            skipDuplicates: true,
+          });
+
+          count += batch.length;
+        }
+
+        return count;
+      },
+      {
+        maxWait: 10000,
+        timeout: 60000,
+      }
+    );
 
     logger.info(`Saved ${savedCount} invalid transactions`);
     return savedCount;

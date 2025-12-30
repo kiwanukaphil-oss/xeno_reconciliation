@@ -1,8 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../../config/database';
 import { logger } from '../../config/logger';
 import { UnitRegistryService } from '../unit-registry/UnitRegistryService';
-
-const prisma = new PrismaClient();
 
 export interface FundPriceData {
   fundCode: string;

@@ -2,6 +2,10 @@ import Papa from 'papaparse';
 import fs from 'fs';
 import { logger } from '../../../config/logger';
 import { ParsedBankTransaction, RawBankTransactionRow } from '../../../types/bankTransaction';
+import { TransactionType } from '@prisma/client';
+
+// Valid enum values for type checking
+const VALID_TRANSACTION_TYPES: string[] = Object.values(TransactionType);
 
 /**
  * Parses bank transaction CSV files using streaming for memory efficiency
@@ -96,8 +100,13 @@ export class BankCSVParser {
       const accountNumber = BankCSVParser.cleanString(row['Acc Number'] || row['acc number'] || '');
       const goalTitle = BankCSVParser.cleanString(row['Goal Name'] || row['goal name'] || '');
       const goalNumber = BankCSVParser.cleanString(row['Goal Number'] || row['goal number'] || '');
-      const transactionType = BankCSVParser.cleanString(row['Transaction Type'] || row['transaction type'] || '').toUpperCase();
+      const transactionTypeStr = BankCSVParser.cleanString(row['Transaction Type'] || row['transaction type'] || '').toUpperCase();
       const transactionId = BankCSVParser.cleanString(row['Transaction ID'] || row['transaction id'] || '');
+
+      // Convert string to TransactionType enum (validation handles invalid values)
+      const transactionType = VALID_TRANSACTION_TYPES.includes(transactionTypeStr)
+        ? (transactionTypeStr as TransactionType)
+        : (transactionTypeStr as TransactionType); // Keep raw value, validator will catch invalid
 
       // Parse total amount
       const totalAmount = BankCSVParser.parseAmount(row['Total Amount'] || row['total amount']);

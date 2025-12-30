@@ -1,8 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../../config/database';
 import { logger } from '../../config/logger';
 import { CacheService, CacheKeys, CacheTTL } from '../cache/CacheService';
-
-const prisma = new PrismaClient();
 
 export interface UnitRegistryEntry {
   accountId: string;

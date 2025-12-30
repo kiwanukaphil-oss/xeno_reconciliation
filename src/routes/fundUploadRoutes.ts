@@ -231,10 +231,10 @@ router.post(
         throw new AppError(400, 'Batch is not waiting for approval');
       }
 
-      // Update batch with approval status
+      // Update batch with approval status (validated above as 'approved' or 'rejected')
       await UploadBatchManager.updateBatchAfterApproval(
         batchId,
-        approvalStatus.toUpperCase() as any,
+        approvalStatus.toUpperCase() as 'APPROVED' | 'REJECTED',
         approvedBy
       );
 

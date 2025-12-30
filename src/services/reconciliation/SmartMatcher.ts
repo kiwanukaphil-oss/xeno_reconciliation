@@ -1,7 +1,6 @@
-import { PrismaClient, ReconciliationStatus, Prisma } from '@prisma/client';
+import { Prisma, VarianceReviewTag } from '@prisma/client';
+import { prisma } from '../../config/database';
 import { logger } from '../../config/logger';
-
-const prisma = new PrismaClient();
 
 // Tolerance settings
 const AMOUNT_TOLERANCE_PERCENT = 0.01; // 1%
@@ -1217,49 +1216,6 @@ export class SmartMatcher {
     return [];
   }
 
-  /**
-   * Apply match results and update reconciliation status
-   * Also sets matchedGoalTransactionCode to link bank transactions to their matched goal transactions
-   */
-  static async applyMatches(
-    matches: MatchResult[],
-    updateStatus: boolean = false
-  ): Promise<{ updated: number }> {
-    if (!updateStatus) {
-      return { updated: 0 };
-    }
-
-    let updated = 0;
-
-    for (const match of matches) {
-      // Find the goalTransactionCode from the matched fund transactions
-      // All fund transactions in a match should have the same goalTransactionCode
-      let matchedGoalTransactionCode: string | null = null;
-      if (match.fundIds.length > 0) {
-        const fundTxn = await prisma.fundTransaction.findFirst({
-          where: { id: match.fundIds[0] },
-          select: { goalTransactionCode: true },
-        });
-        matchedGoalTransactionCode = fundTxn?.goalTransactionCode || null;
-      }
-
-      // Update bank transaction statuses and set the matched goal transaction code
-      await prisma.bankGoalTransaction.updateMany({
-        where: { id: { in: match.bankIds } },
-        data: {
-          reconciliationStatus: ReconciliationStatus.MATCHED,
-          matchedGoalTransactionCode,
-          matchedAt: new Date(),
-          matchScore: Math.round(match.confidence * 100),
-          updatedAt: new Date(),
-        },
-      });
-      updated += match.bankIds.length;
-    }
-
-    return { updated };
-  }
-
   // ============================================================================
   // VARIANCE REVIEW METHODS
   // ============================================================================
@@ -1269,14 +1225,14 @@ export class SmartMatcher {
    */
   static async reviewBankTransaction(
     transactionId: string,
-    reviewTag: string,
+    reviewTag: VarianceReviewTag,
     reviewNotes: string | null,
     reviewedBy: string
   ): Promise<{ success: boolean; transaction: any }> {
     const transaction = await prisma.bankGoalTransaction.update({
       where: { id: transactionId },
       data: {
-        reviewTag: reviewTag as any, // Cast to enum
+        reviewTag,
         reviewNotes,
         reviewedAt: new Date(),
         reviewedBy,
@@ -1296,14 +1252,14 @@ export class SmartMatcher {
    */
   static async reviewGoalTransaction(
     goalTransactionCode: string,
-    reviewTag: string,
+    reviewTag: VarianceReviewTag,
     reviewNotes: string | null,
     reviewedBy: string
   ): Promise<{ success: boolean; updatedCount: number }> {
     const result = await prisma.fundTransaction.updateMany({
       where: { goalTransactionCode },
       data: {
-        reviewTag: reviewTag as any,
+        reviewTag,
         reviewNotes,
         reviewedAt: new Date(),
         reviewedBy,
@@ -1319,7 +1275,7 @@ export class SmartMatcher {
   static async bulkReview(
     bankTransactionIds: string[],
     goalTransactionCodes: string[],
-    reviewTag: string,
+    reviewTag: VarianceReviewTag,
     reviewNotes: string | null,
     reviewedBy: string
   ): Promise<{ bank: number; goal: number }> {
@@ -1330,7 +1286,7 @@ export class SmartMatcher {
       const result = await prisma.bankGoalTransaction.updateMany({
         where: { id: { in: bankTransactionIds } },
         data: {
-          reviewTag: reviewTag as any,
+          reviewTag,
           reviewNotes,
           reviewedAt: new Date(),
           reviewedBy,
@@ -1343,7 +1299,7 @@ export class SmartMatcher {
       const result = await prisma.fundTransaction.updateMany({
         where: { goalTransactionCode: { in: goalTransactionCodes } },
         data: {
-          reviewTag: reviewTag as any,
+          reviewTag,
           reviewNotes,
           reviewedAt: new Date(),
           reviewedBy,
@@ -2233,7 +2189,7 @@ export class SmartMatcher {
         // Exclude already linked reversals (but include null/untagged transactions)
         OR: [
           { reviewTag: null },
-          { reviewTag: { not: 'REVERSAL_NETTED' as any } },
+          { reviewTag: { not: VarianceReviewTag.REVERSAL_NETTED } },
         ],
         // Exclude Transfer_Reversal and RT Change
         AND: [
@@ -2335,7 +2291,7 @@ export class SmartMatcher {
       prisma.bankGoalTransaction.update({
         where: { id: transactionId1 },
         data: {
-          reviewTag: 'REVERSAL_NETTED' as any, // Type will be valid after Prisma regenerate
+          reviewTag: VarianceReviewTag.REVERSAL_NETTED,
           reviewNotes: `Reversal pair with: ${transactionId2}`,
           reviewedBy: linkedBy,
           reviewedAt: now,
@@ -2345,7 +2301,7 @@ export class SmartMatcher {
       prisma.bankGoalTransaction.update({
         where: { id: transactionId2 },
         data: {
-          reviewTag: 'REVERSAL_NETTED' as any, // Type will be valid after Prisma regenerate
+          reviewTag: VarianceReviewTag.REVERSAL_NETTED,
           reviewNotes: `Reversal pair with: ${transactionId1}`,
           reviewedBy: linkedBy,
           reviewedAt: now,

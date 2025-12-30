@@ -7,7 +7,8 @@ import {
   ParsedFundTransaction,
   TransactionValidationError,
 } from '../../../types/fundTransaction';
-import { TRANSACTION_SOURCES, isValidTransactionSource, getInvalidSourceMessage } from '../../../constants/transactionSources';
+// Note: TRANSACTION_SOURCES, isValidTransactionSource, getInvalidSourceMessage no longer needed
+// as validation is now done at parse time with proper Prisma enum types
 
 /**
  * Validates individual fund transactions
@@ -174,8 +175,8 @@ export class FundTransactionValidator {
       // For historical data (pre-2024), missing transactionId is acceptable - no error
     }
 
-    // Validate source
-    if (StringUtils.isEmpty(transaction.source)) {
+    // Validate source (now a TransactionSource enum or null)
+    if (transaction.source === null) {
       if (isSourceTrackingRequired) {
         errors.push({
           rowNumber,
@@ -187,18 +188,9 @@ export class FundTransactionValidator {
         });
       }
       // For historical data (pre-2024), missing source is acceptable - no error
-    } else if (!isValidTransactionSource(transaction.source)) {
-      // Validate source is one of the allowed values (if provided)
-      errors.push({
-        rowNumber,
-        field: 'source',
-        errorCode: 'INVALID_SOURCE',
-        message: getInvalidSourceMessage(transaction.source),
-        severity: 'CRITICAL',
-        suggestedAction: `Source must be one of: ${TRANSACTION_SOURCES.join(', ')}`,
-        value: transaction.source,
-      });
     }
+    // Note: If source is not null, it's already a valid TransactionSource enum
+    // (validated during parsing), so no additional validation needed
 
     return errors;
   }

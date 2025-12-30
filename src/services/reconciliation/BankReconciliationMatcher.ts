@@ -1,8 +1,7 @@
-import { PrismaClient, ReconciliationStatus } from '@prisma/client';
+import { ReconciliationStatus } from '@prisma/client';
+import { prisma } from '../../config/database';
 import { logger } from '../../config/logger';
 import { ParsedBankTransaction } from '../../types/bankTransaction';
-
-const prisma = new PrismaClient();
 
 // Local type definitions (previously from Prisma, now internal-only)
 type VarianceType =

@@ -1,4 +1,5 @@
 import { Decimal } from '@prisma/client/runtime/library';
+import { TransactionType, TransactionSource } from '@prisma/client';
 
 // Raw CSV row data (as parsed from file)
 export interface RawFundTransactionRow {
@@ -33,7 +34,7 @@ export interface ParsedFundTransaction {
 
   // Source tracking fields
   transactionId: string; // Transaction ID from source statement
-  source: string; // Transaction source/channel
+  source: TransactionSource | null; // Transaction source/channel (nullable)
 
   // Original fields (typed)
   transactionDate: Date;
@@ -41,7 +42,7 @@ export interface ParsedFundTransaction {
   fundCode: string;
   amount: number;
   units: number;
-  transactionType: string;
+  transactionType: TransactionType;
   bidPrice: number;
   offerPrice: number;
   midPrice: number;

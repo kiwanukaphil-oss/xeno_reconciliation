@@ -1,7 +1,6 @@
-import { PrismaClient, VarianceReviewTag } from '@prisma/client';
+import { VarianceReviewTag } from '@prisma/client';
+import { prisma } from '../../config/database';
 import { logger } from '../../config/logger';
-
-const prisma = new PrismaClient();
 
 // Tolerance settings (same as SmartMatcher)
 const AMOUNT_TOLERANCE_PERCENT = 0.01; // 1%

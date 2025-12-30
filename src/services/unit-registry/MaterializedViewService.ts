@@ -1,8 +1,6 @@
-import { PrismaClient } from '@prisma/client';
+import { prisma } from '../../config/database';
 import { logger } from '../../config/logger';
 import { CacheService, CacheKeys } from '../cache/CacheService';
-
-const prisma = new PrismaClient();
 
 /**
  * Service for managing materialized view refreshes

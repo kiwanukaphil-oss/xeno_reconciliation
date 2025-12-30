@@ -10,85 +10,99 @@ import { ParsedBankTransaction, InvalidBankTransaction } from '../../../types/ba
 export class BankTransactionRepository {
   /**
    * Saves validated bank transactions to database in batches
+   * Uses a database transaction to ensure atomicity - all batches succeed or none do
    */
   static async saveTransactions(
     transactions: ParsedBankTransaction[],
     batchId: string
   ): Promise<number> {
     const BATCH_SIZE = 500;
-    let savedCount = 0;
 
     logger.info(`Saving ${transactions.length} bank transactions for batch ${batchId}`);
 
-    for (let i = 0; i < transactions.length; i += BATCH_SIZE) {
-      const batch = transactions.slice(i, i + BATCH_SIZE);
+    // Wrap entire operation in a transaction for atomicity
+    const savedCount = await prisma.$transaction(
+      async (tx) => {
+        let count = 0;
 
-      // Prepare data for each transaction
-      const transactionData = [];
+        for (let i = 0; i < transactions.length; i += BATCH_SIZE) {
+          const batch = transactions.slice(i, i + BATCH_SIZE);
 
-      for (const txn of batch) {
-        try {
-          // Find account - should always exist (validated in BankTransactionValidator)
-          const account = await prisma.account.findUnique({
-            where: { accountNumber: txn.accountNumber },
-            include: { client: true },
-          });
+          // Prepare data for each transaction
+          const transactionData = [];
 
-          if (!account) {
-            // This should never happen if validation passed - throw error to prevent silent data loss
-            throw new Error(`CRITICAL: Account "${txn.accountNumber}" not found at row ${txn.rowNumber}. This should have been caught during validation.`);
+          for (const txn of batch) {
+            try {
+              // Find account - should always exist (validated in BankTransactionValidator)
+              const account = await tx.account.findUnique({
+                where: { accountNumber: txn.accountNumber },
+                include: { client: true },
+              });
+
+              if (!account) {
+                // This should never happen if validation passed - throw error to prevent silent data loss
+                throw new Error(`CRITICAL: Account "${txn.accountNumber}" not found at row ${txn.rowNumber}. This should have been caught during validation.`);
+              }
+
+              // Find goal - should always exist (validated in BankTransactionValidator)
+              const goal = await tx.goal.findUnique({
+                where: { goalNumber: txn.goalNumber },
+              });
+
+              if (!goal) {
+                // This should never happen if validation passed - throw error to prevent silent data loss
+                throw new Error(`CRITICAL: Goal "${txn.goalNumber}" not found at row ${txn.rowNumber}. This should have been caught during validation.`);
+              }
+
+              transactionData.push({
+                clientId: account.clientId,
+                accountId: account.id,
+                goalId: goal.id,
+                uploadBatchId: batchId,
+                transactionDate: txn.transactionDate,
+                transactionType: txn.transactionType,
+                transactionId: txn.transactionId,
+                firstName: txn.firstName,
+                lastName: txn.lastName,
+                goalTitle: txn.goalTitle,
+                goalNumber: txn.goalNumber,
+                totalAmount: new Prisma.Decimal(txn.totalAmount),
+                xummfPercentage: new Prisma.Decimal(txn.xummfPercentage / 100),
+                xubfPercentage: new Prisma.Decimal(txn.xubfPercentage / 100),
+                xudefPercentage: new Prisma.Decimal(txn.xudefPercentage / 100),
+                xurefPercentage: new Prisma.Decimal(txn.xurefPercentage / 100),
+                xummfAmount: new Prisma.Decimal(txn.xummfAmount),
+                xubfAmount: new Prisma.Decimal(txn.xubfAmount),
+                xudefAmount: new Prisma.Decimal(txn.xudefAmount),
+                xurefAmount: new Prisma.Decimal(txn.xurefAmount),
+                reconciliationStatus: 'PENDING' as const,
+                rowNumber: txn.rowNumber,
+              });
+            } catch (error: any) {
+              logger.error(`Error preparing transaction at row ${txn.rowNumber}:`, error);
+              throw error; // Re-throw to trigger transaction rollback
+            }
           }
 
-          // Find goal - should always exist (validated in BankTransactionValidator)
-          const goal = await prisma.goal.findUnique({
-            where: { goalNumber: txn.goalNumber },
-          });
-
-          if (!goal) {
-            // This should never happen if validation passed - throw error to prevent silent data loss
-            throw new Error(`CRITICAL: Goal "${txn.goalNumber}" not found at row ${txn.rowNumber}. This should have been caught during validation.`);
+          // Batch insert
+          if (transactionData.length > 0) {
+            await tx.bankGoalTransaction.createMany({
+              data: transactionData,
+              skipDuplicates: true,
+            });
+            count += transactionData.length;
           }
 
-          transactionData.push({
-            clientId: account.clientId,
-            accountId: account.id,
-            goalId: goal.id,
-            uploadBatchId: batchId,
-            transactionDate: txn.transactionDate,
-            transactionType: txn.transactionType as any,
-            transactionId: txn.transactionId,
-            firstName: txn.firstName,
-            lastName: txn.lastName,
-            goalTitle: txn.goalTitle,
-            goalNumber: txn.goalNumber,
-            totalAmount: new Prisma.Decimal(txn.totalAmount),
-            xummfPercentage: new Prisma.Decimal(txn.xummfPercentage / 100),
-            xubfPercentage: new Prisma.Decimal(txn.xubfPercentage / 100),
-            xudefPercentage: new Prisma.Decimal(txn.xudefPercentage / 100),
-            xurefPercentage: new Prisma.Decimal(txn.xurefPercentage / 100),
-            xummfAmount: new Prisma.Decimal(txn.xummfAmount),
-            xubfAmount: new Prisma.Decimal(txn.xubfAmount),
-            xudefAmount: new Prisma.Decimal(txn.xudefAmount),
-            xurefAmount: new Prisma.Decimal(txn.xurefAmount),
-            reconciliationStatus: 'PENDING' as const,
-            rowNumber: txn.rowNumber,
-          });
-        } catch (error: any) {
-          logger.error(`Error preparing transaction at row ${txn.rowNumber}:`, error);
+          logger.info(`Saved batch ${Math.floor(i / BATCH_SIZE) + 1}: ${transactionData.length} transactions`);
         }
-      }
 
-      // Batch insert
-      if (transactionData.length > 0) {
-        await prisma.bankGoalTransaction.createMany({
-          data: transactionData,
-          skipDuplicates: true,
-        });
-        savedCount += transactionData.length;
+        return count;
+      },
+      {
+        maxWait: 30000, // 30 seconds max wait to acquire connection
+        timeout: 300000, // 5 minutes for the entire transaction (large uploads)
       }
-
-      logger.info(`Saved batch ${Math.floor(i / BATCH_SIZE) + 1}: ${transactionData.length} transactions`);
-    }
+    );
 
     logger.info(`Total saved: ${savedCount} bank transactions`);
     return savedCount;
@@ -334,7 +348,7 @@ export class BankTransactionRepository {
    */
   static async updateTransactionStatus(
     transactionId: string,
-    status: string,
+    status: ReconciliationStatus,
     _notes?: string,
     updatedBy?: string
   ): Promise<any> {
@@ -350,7 +364,7 @@ export class BankTransactionRepository {
     const updated = await prisma.bankGoalTransaction.update({
       where: { id: transactionId },
       data: {
-        reconciliationStatus: status as any,
+        reconciliationStatus: status,
         updatedAt: new Date(),
       },
     });
@@ -372,7 +386,7 @@ export class BankTransactionRepository {
    */
   static async bulkUpdateTransactionStatus(
     transactionIds: string[],
-    status: string,
+    status: ReconciliationStatus,
     _notes?: string,
     updatedBy?: string
   ): Promise<{ updated: number; failed: number; errors: string[] }> {
@@ -385,7 +399,7 @@ export class BankTransactionRepository {
         await prisma.bankGoalTransaction.update({
           where: { id },
           data: {
-            reconciliationStatus: status as any,
+            reconciliationStatus: status,
             updatedAt: new Date(),
           },
         });
