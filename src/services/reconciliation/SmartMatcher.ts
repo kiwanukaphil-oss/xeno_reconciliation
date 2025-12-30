@@ -1306,6 +1306,7 @@ export class SmartMatcher {
       reviewTag?: string;
       goalNumber?: string;
       clientSearch?: string;
+      resolutionStatus?: 'RESOLVED' | 'PENDING' | 'ALL';
     }
   ): Promise<{
     data: any[];
@@ -1353,6 +1354,13 @@ export class SmartMatcher {
       conditions.push(`review_tag IS NOT NULL`);
     }
 
+    // Resolution status filter
+    if (filters?.resolutionStatus === 'RESOLVED') {
+      conditions.push(`variance_resolved = true`);
+    } else if (filters?.resolutionStatus === 'PENDING') {
+      conditions.push(`variance_resolved = false`);
+    }
+
     const filterClause = conditions.length > 0 ? `AND ${conditions.join(' AND ')}` : '';
 
     // Combined query for unmatched bank and goal transactions
@@ -1377,7 +1385,10 @@ export class SmartMatcher {
           b."reviewTag"::text as review_tag,
           b."reviewNotes" as review_notes,
           b."reviewedBy" as reviewed_by,
-          b."reviewedAt" as reviewed_at
+          b."reviewedAt" as reviewed_at,
+          b."varianceResolved" as variance_resolved,
+          b."resolvedAt" as resolved_at,
+          b."resolvedReason" as resolved_reason
         FROM bank_goal_transactions b
         JOIN clients c ON b."clientId" = c.id
         JOIN accounts a ON b."accountId" = a.id
@@ -1404,7 +1415,10 @@ export class SmartMatcher {
           MAX(f."reviewTag"::text) as review_tag,
           MAX(f."reviewNotes") as review_notes,
           MAX(f."reviewedBy") as reviewed_by,
-          MAX(f."reviewedAt") as reviewed_at
+          MAX(f."reviewedAt") as reviewed_at,
+          BOOL_OR(f."varianceResolved") as variance_resolved,
+          MAX(f."resolvedAt") as resolved_at,
+          MAX(f."resolvedReason") as resolved_reason
         FROM fund_transactions f
         JOIN goals g ON f."goalId" = g.id
         JOIN accounts a ON g."accountId" = a.id
@@ -1460,6 +1474,9 @@ export class SmartMatcher {
         reviewNotes: r.review_notes,
         reviewedBy: r.reviewed_by,
         reviewedAt: r.reviewed_at,
+        varianceResolved: r.variance_resolved || false,
+        resolvedAt: r.resolved_at,
+        resolvedReason: r.resolved_reason,
       })),
       summary: {
         totalUnmatched,

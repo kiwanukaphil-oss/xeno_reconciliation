@@ -190,6 +190,12 @@ model FundTransaction {
   reviewedAt           DateTime?
   reviewedBy           String?
 
+  // Variance Resolution Tracking (tracks when tagged variances are resolved by subsequent uploads)
+  varianceResolved     Boolean   @default(false)
+  resolvedAt           DateTime?
+  resolvedReason       String?   @db.Text  // How/why it was resolved
+  resolvedByBatchId    String?   // The upload batch that resolved the variance
+
   // Audit Fields
   rowNumber            Int      // Original CSV row number
   createdAt            DateTime @default(now())
@@ -214,6 +220,7 @@ model FundTransaction {
   @@index([fundId])
   @@index([transactionType])
   @@index([reviewTag]) // For filtering by review tag
+  @@index([varianceResolved]) // For filtering resolved/unresolved variances
   @@index([transactionDate, accountId, goalId]) // Composite index for common queries
   @@map("fund_transactions")
 }
@@ -437,6 +444,12 @@ model BankGoalTransaction {
   reviewedAt          DateTime?
   reviewedBy          String?
 
+  // Variance Resolution Tracking (tracks when tagged variances are resolved by subsequent uploads)
+  varianceResolved     Boolean   @default(false)
+  resolvedAt           DateTime?
+  resolvedReason       String?   @db.Text  // How/why it was resolved
+  resolvedByBatchId    String?   // The upload batch that resolved the variance
+
   // Audit Fields
   rowNumber           Int      // Original CSV row number
   createdAt           DateTime @default(now())
@@ -459,6 +472,7 @@ model BankGoalTransaction {
   @@index([transactionId])
   @@index([matchedGoalTransactionCode])
   @@index([reviewTag]) // For filtering by review tag
+  @@index([varianceResolved]) // For filtering resolved/unresolved variances
   @@index([goalNumber, transactionId, totalAmount]) // Composite index for matching
   @@map("bank_goal_transactions")
 }

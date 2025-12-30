@@ -748,6 +748,10 @@ export interface VarianceTransaction {
   reviewNotes: string | null;
   reviewedBy: string | null;
   reviewedAt: string | null;
+  // Resolution tracking fields
+  varianceResolved: boolean;
+  resolvedAt: string | null;
+  resolvedReason: string | null;
 }
 
 export interface VarianceTransactionsSummary {
@@ -886,6 +890,7 @@ export const fetchVarianceTransactions = async (params: {
   reviewTag?: string;
   goalNumber?: string;
   clientSearch?: string;
+  resolutionStatus?: 'RESOLVED' | 'PENDING' | 'ALL';
   page?: number;
   limit?: number;
 }): Promise<VarianceTransactionsResponse> => {
@@ -896,6 +901,7 @@ export const fetchVarianceTransactions = async (params: {
   if (params.reviewTag) queryParams.append("reviewTag", params.reviewTag);
   if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
   if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.resolutionStatus) queryParams.append("resolutionStatus", params.resolutionStatus);
   if (params.page) queryParams.append("page", params.page.toString());
   if (params.limit) queryParams.append("limit", params.limit.toString());
 
@@ -910,6 +916,7 @@ export const exportVarianceTransactionsExcel = async (params: {
   reviewTag?: string;
   goalNumber?: string;
   clientSearch?: string;
+  resolutionStatus?: 'RESOLVED' | 'PENDING' | 'ALL';
 }) => {
   const queryParams = new URLSearchParams();
   if (params.startDate) queryParams.append("startDate", params.startDate);
@@ -918,6 +925,7 @@ export const exportVarianceTransactionsExcel = async (params: {
   if (params.reviewTag) queryParams.append("reviewTag", params.reviewTag);
   if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
   if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.resolutionStatus) queryParams.append("resolutionStatus", params.resolutionStatus);
 
   const response = await fetch(`${API_URL}/api/goal-comparison/variance-transactions/export?${queryParams}`);
   if (!response.ok) {
@@ -1016,6 +1024,87 @@ export const getReversalPairInfo = async (
 }> => {
   const response = await fetch(
     `${API_URL}/api/goal-comparison/reversal-info/${encodeURIComponent(transactionId)}`
+  );
+  return handleResponse(response);
+};
+
+// ============================================================================
+// VARIANCE RESOLUTION API
+// ============================================================================
+
+export interface VarianceResolutionResult {
+  resolved: number;
+  byTag: Record<string, number>;
+  details: Array<{
+    id: string;
+    source: 'BANK' | 'GOAL';
+    goalNumber: string;
+    transactionId: string | null;
+    amount: number;
+    originalTag: string;
+    resolvedReason: string;
+  }>;
+}
+
+export interface VarianceResolutionStats {
+  totalTaggedForResolution: number;
+  totalResolved: number;
+  pendingResolution: number;
+  byTag: Record<string, { total: number; resolved: number; pending: number }>;
+}
+
+// Manually trigger variance resolution detection
+export const detectResolvedVariances = async (params?: {
+  startDate?: string;
+  endDate?: string;
+  triggeredBy?: string;
+}): Promise<{
+  success: boolean;
+  message: string;
+  data: VarianceResolutionResult;
+}> => {
+  const response = await fetch(`${API_URL}/api/variance-resolution/detect`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params || {}),
+  });
+  return handleResponse(response);
+};
+
+// Get variance resolution statistics
+export const getVarianceResolutionStats = async (): Promise<{
+  success: boolean;
+  data: VarianceResolutionStats;
+}> => {
+  const response = await fetch(`${API_URL}/api/variance-resolution/stats`);
+  return handleResponse(response);
+};
+
+// Get resolved variances report
+export const getResolvedVariancesReport = async (params?: {
+  startDate?: string;
+  endDate?: string;
+  goalNumber?: string;
+  clientSearch?: string;
+  originalTag?: string;
+}): Promise<{
+  success: boolean;
+  data: VarianceTransaction[];
+  summary: {
+    totalResolved: number;
+    byTag: Record<string, number>;
+    bySource: { bank: number; goal: number };
+  };
+}> => {
+  const queryParams = new URLSearchParams();
+  if (params?.startDate) queryParams.append('startDate', params.startDate);
+  if (params?.endDate) queryParams.append('endDate', params.endDate);
+  if (params?.goalNumber) queryParams.append('goalNumber', params.goalNumber);
+  if (params?.clientSearch) queryParams.append('clientSearch', params.clientSearch);
+  if (params?.originalTag) queryParams.append('originalTag', params.originalTag);
+
+  const response = await fetch(
+    `${API_URL}/api/variance-resolution/report?${queryParams}`
   );
   return handleResponse(response);
 };

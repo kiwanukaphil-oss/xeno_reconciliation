@@ -36,6 +36,7 @@ import {
   VARIANCE_REVIEW_TAGS,
   findReversalCandidates,
   linkReversal,
+  detectResolvedVariances,
 } from "../../services/api";
 import type {
   SmartMatchingResult,
@@ -188,6 +189,7 @@ const GoalComparison = () => {
   });
   const [varianceReviewStatus, setVarianceReviewStatus] = useState<'PENDING' | 'REVIEWED' | 'ALL'>('REVIEWED');
   const [varianceTagFilter, setVarianceTagFilter] = useState('');
+  const [varianceResolutionStatus, setVarianceResolutionStatus] = useState<'RESOLVED' | 'PENDING' | 'ALL'>('ALL');
   const [reviewingTransaction, setReviewingTransaction] = useState<{id: string; type: 'BANK' | 'GOAL'} | null>(null);
   const [selectedReviewTag, setSelectedReviewTag] = useState<VarianceReviewTag | ''>('');
   const [reviewNotes, setReviewNotes] = useState('');
@@ -196,6 +198,7 @@ const GoalComparison = () => {
   const [error, setError] = useState<string | null>(null);
   const [exporting, setExporting] = useState(false);
   const [runningMatching, setRunningMatching] = useState(false);
+  const [detectingResolutions, setDetectingResolutions] = useState(false);
 
   // Filter state
   const [startDate, setStartDate] = useState("");
@@ -258,7 +261,7 @@ const GoalComparison = () => {
         fetchVarianceData();
       }
     }
-  }, [startDate, endDate, activeTab, varianceReviewStatus, varianceTagFilter]);
+  }, [startDate, endDate, activeTab, varianceReviewStatus, varianceTagFilter, varianceResolutionStatus]);
 
   const fetchData = async (page: number = 1) => {
     setLoading(true);
@@ -319,6 +322,7 @@ const GoalComparison = () => {
         clientSearch: clientSearch || undefined,
         reviewStatus: varianceReviewStatus !== 'ALL' ? varianceReviewStatus : undefined,
         reviewTag: varianceTagFilter || undefined,
+        resolutionStatus: varianceResolutionStatus !== 'ALL' ? varianceResolutionStatus : undefined,
         page,
         limit: variancePagination.limit,
       });
@@ -346,6 +350,29 @@ const GoalComparison = () => {
       setReviewNotes('');
     } catch (err) {
       setError((err as Error).message);
+    }
+  };
+
+  // Detect resolved variances - checks if tagged transactions have been resolved by new uploads
+  const handleDetectResolutions = async () => {
+    try {
+      setDetectingResolutions(true);
+      const result = await detectResolvedVariances({
+        startDate: startDate || undefined,
+        endDate: endDate || undefined,
+        triggeredBy: 'manual',
+      });
+      if (result.success && result.data.resolved > 0) {
+        alert(`Detected ${result.data.resolved} resolved variance(s). Refreshing data...`);
+        // Refresh the variance data to show updated resolution status
+        fetchVarianceData(variancePagination.page);
+      } else {
+        alert('No new resolutions detected.');
+      }
+    } catch (err) {
+      setError((err as Error).message);
+    } finally {
+      setDetectingResolutions(false);
     }
   };
 
@@ -665,6 +692,7 @@ const GoalComparison = () => {
           clientSearch: clientSearch || undefined,
           reviewStatus: varianceReviewStatus !== 'ALL' ? varianceReviewStatus : undefined,
           reviewTag: varianceTagFilter || undefined,
+          resolutionStatus: varianceResolutionStatus !== 'ALL' ? varianceResolutionStatus : undefined,
         });
       }
     } catch (err) {
@@ -2185,6 +2213,27 @@ const GoalComparison = () => {
                   ))}
                 </select>
               </div>
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">Resolution Status</label>
+                <select
+                  value={varianceResolutionStatus}
+                  onChange={(e) => setVarianceResolutionStatus(e.target.value as 'RESOLVED' | 'PENDING' | 'ALL')}
+                  className="px-3 py-2 border border-gray-300 rounded-lg text-sm"
+                >
+                  <option value="ALL">All</option>
+                  <option value="PENDING">Pending Resolution</option>
+                  <option value="RESOLVED">Resolved</option>
+                </select>
+              </div>
+              <button
+                onClick={handleDetectResolutions}
+                disabled={detectingResolutions}
+                className="flex items-center gap-2 px-4 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 disabled:opacity-50"
+                title="Check if tagged variances have been resolved by new uploads"
+              >
+                {detectingResolutions ? <Loader2 className="h-4 w-4 animate-spin" /> : <RotateCcw className="h-4 w-4" />}
+                Detect Resolutions
+              </button>
               <button
                 onClick={handleExport}
                 disabled={exporting || varianceData.length === 0}
@@ -2211,6 +2260,7 @@ const GoalComparison = () => {
                       <th className="px-4 py-3 text-right text-xs font-medium text-gray-500 uppercase">Amount</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Review Tag</th>
                       <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">Notes</th>
+                      <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Status</th>
                       <th className="px-4 py-3 text-center text-xs font-medium text-gray-500 uppercase">Action</th>
                     </tr>
                   </thead>
@@ -2278,6 +2328,20 @@ const GoalComparison = () => {
                           ) : txn.reviewNotes ? (
                             <span className="text-xs text-gray-600 max-w-[150px] truncate block" title={txn.reviewNotes}>
                               {txn.reviewNotes}
+                            </span>
+                          ) : (
+                            <span className="text-xs text-gray-400">-</span>
+                          )}
+                        </td>
+                        <td className="px-4 py-3 text-center">
+                          {txn.varianceResolved ? (
+                            <span className="inline-flex items-center gap-1 text-xs px-2 py-1 rounded bg-green-100 text-green-700" title={txn.resolvedReason || 'Resolved'}>
+                              <CheckCircle2 className="h-3 w-3" />
+                              Resolved
+                            </span>
+                          ) : txn.reviewTag ? (
+                            <span className="text-xs px-2 py-1 rounded bg-yellow-100 text-yellow-700">
+                              Pending
                             </span>
                           ) : (
                             <span className="text-xs text-gray-400">-</span>
