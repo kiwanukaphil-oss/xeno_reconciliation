@@ -54,8 +54,7 @@ const TransactionComparison = () => {
   // Filter state
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [goalNumber, setGoalNumber] = useState("");
-  const [clientSearch, setClientSearch] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
   const [reviewStatus, setReviewStatus] = useState<"ALL" | "PENDING" | "REVIEWED">("ALL");
 
   // Tagging state
@@ -75,8 +74,7 @@ const TransactionComparison = () => {
       const result = await fetchVarianceTransactions({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
-        goalNumber: goalNumber || undefined,
-        clientSearch: clientSearch || undefined,
+        search: searchTerm || undefined,
         reviewStatus: reviewStatus !== "ALL" ? reviewStatus : undefined,
         transactionSource: activeTab,
         page,
@@ -99,8 +97,7 @@ const TransactionComparison = () => {
   const handleResetFilters = () => {
     setStartDate("");
     setEndDate("");
-    setGoalNumber("");
-    setClientSearch("");
+    setSearchTerm("");
     setReviewStatus("ALL");
     setTimeout(() => fetchData(1), 0);
   };
@@ -111,8 +108,7 @@ const TransactionComparison = () => {
       await exportVarianceTransactionsExcel({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
-        goalNumber: goalNumber || undefined,
-        clientSearch: clientSearch || undefined,
+        search: searchTerm || undefined,
         reviewStatus: reviewStatus !== "ALL" ? reviewStatus : undefined,
       });
     } catch (err) {
@@ -318,28 +314,16 @@ const TransactionComparison = () => {
             </div>
           </div>
 
-          {/* Goal Number */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Goal Number</label>
-            <input
-              type="text"
-              value={goalNumber}
-              onChange={(e) => setGoalNumber(e.target.value)}
-              placeholder="e.g., 701-123..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          {/* Client Search */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Client Name</label>
+          {/* Unified Search */}
+          <div className="md:col-span-2">
+            <label className="block text-sm font-medium text-gray-700 mb-1">Search</label>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
                 type="text"
-                value={clientSearch}
-                onChange={(e) => setClientSearch(e.target.value)}
-                placeholder="Search client..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search by client, account, or goal..."
                 className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               />
             </div>

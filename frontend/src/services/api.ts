@@ -437,9 +437,7 @@ export const exportTransactionComparisonCSV = async (params: {
 export const fetchGoalComparison = async (params: {
   startDate?: string;
   endDate?: string;
-  goalNumber?: string;
-  accountNumber?: string;
-  clientSearch?: string;
+  search?: string;
   status?: string;
   page?: number;
   limit?: number;
@@ -447,9 +445,7 @@ export const fetchGoalComparison = async (params: {
   const queryParams = new URLSearchParams();
   if (params.startDate) queryParams.append("startDate", params.startDate);
   if (params.endDate) queryParams.append("endDate", params.endDate);
-  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
-  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
-  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.search) queryParams.append("search", params.search);
   if (params.status) queryParams.append("status", params.status);
   if (params.page) queryParams.append("page", params.page.toString());
   if (params.limit) queryParams.append("limit", params.limit.toString());
@@ -478,17 +474,13 @@ export const fetchGoalTransactionsWithMatching = async (
 export const exportGoalComparisonCSV = async (params: {
   startDate?: string;
   endDate?: string;
-  goalNumber?: string;
-  accountNumber?: string;
-  clientSearch?: string;
+  search?: string;
   status?: string;
 }) => {
   const queryParams = new URLSearchParams();
   if (params.startDate) queryParams.append("startDate", params.startDate);
   if (params.endDate) queryParams.append("endDate", params.endDate);
-  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
-  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
-  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.search) queryParams.append("search", params.search);
   if (params.status) queryParams.append("status", params.status);
 
   const response = await fetch(`${API_URL}/api/goal-comparison/export/csv?${queryParams}`);
@@ -629,9 +621,7 @@ export interface FundComparisonResponse {
 export const fetchFundComparison = async (params: {
   startDate?: string;
   endDate?: string;
-  goalNumber?: string;
-  accountNumber?: string;
-  clientSearch?: string;
+  search?: string;
   status?: string;
   page?: number;
   limit?: number;
@@ -639,9 +629,7 @@ export const fetchFundComparison = async (params: {
   const queryParams = new URLSearchParams();
   if (params.startDate) queryParams.append("startDate", params.startDate);
   if (params.endDate) queryParams.append("endDate", params.endDate);
-  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
-  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
-  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.search) queryParams.append("search", params.search);
   if (params.status) queryParams.append("status", params.status);
   if (params.page) queryParams.append("page", params.page.toString());
   if (params.limit) queryParams.append("limit", params.limit.toString());
@@ -653,17 +641,13 @@ export const fetchFundComparison = async (params: {
 export const exportFundComparisonCSV = async (params: {
   startDate?: string;
   endDate?: string;
-  goalNumber?: string;
-  accountNumber?: string;
-  clientSearch?: string;
+  search?: string;
   status?: string;
 }) => {
   const queryParams = new URLSearchParams();
   if (params.startDate) queryParams.append("startDate", params.startDate);
   if (params.endDate) queryParams.append("endDate", params.endDate);
-  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
-  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
-  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.search) queryParams.append("search", params.search);
   if (params.status) queryParams.append("status", params.status);
 
   const response = await fetch(`${API_URL}/api/goal-comparison/fund-summary/export/csv?${queryParams}`);
@@ -752,8 +736,7 @@ export interface AccountFundComparisonResponse {
 export const fetchAccountFundComparison = async (params: {
   startDate?: string;
   endDate?: string;
-  accountNumber?: string;
-  clientSearch?: string;
+  search?: string;
   status?: string;
   page?: number;
   limit?: number;
@@ -761,8 +744,7 @@ export const fetchAccountFundComparison = async (params: {
   const queryParams = new URLSearchParams();
   if (params.startDate) queryParams.append("startDate", params.startDate);
   if (params.endDate) queryParams.append("endDate", params.endDate);
-  if (params.accountNumber) queryParams.append("accountNumber", params.accountNumber);
-  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.search) queryParams.append("search", params.search);
   if (params.status) queryParams.append("status", params.status);
   if (params.page) queryParams.append("page", params.page.toString());
   if (params.limit) queryParams.append("limit", params.limit.toString());
@@ -950,8 +932,7 @@ export const fetchVarianceTransactions = async (params: {
   endDate?: string;
   reviewStatus?: 'PENDING' | 'REVIEWED' | 'ALL';
   reviewTag?: string;
-  goalNumber?: string;
-  clientSearch?: string;
+  search?: string;
   resolutionStatus?: 'RESOLVED' | 'PENDING' | 'ALL';
   transactionSource?: 'BANK' | 'GOAL';
   page?: number;
@@ -962,8 +943,7 @@ export const fetchVarianceTransactions = async (params: {
   if (params.endDate) queryParams.append("endDate", params.endDate);
   if (params.reviewStatus) queryParams.append("reviewStatus", params.reviewStatus);
   if (params.reviewTag) queryParams.append("reviewTag", params.reviewTag);
-  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
-  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.search) queryParams.append("search", params.search);
   if (params.resolutionStatus) queryParams.append("resolutionStatus", params.resolutionStatus);
   if (params.transactionSource) queryParams.append("transactionSource", params.transactionSource);
   if (params.page) queryParams.append("page", params.page.toString());
@@ -978,8 +958,7 @@ export const exportVarianceTransactionsExcel = async (params: {
   endDate?: string;
   reviewStatus?: 'PENDING' | 'REVIEWED' | 'ALL';
   reviewTag?: string;
-  goalNumber?: string;
-  clientSearch?: string;
+  search?: string;
   resolutionStatus?: 'RESOLVED' | 'PENDING' | 'ALL';
 }) => {
   const queryParams = new URLSearchParams();
@@ -987,8 +966,7 @@ export const exportVarianceTransactionsExcel = async (params: {
   if (params.endDate) queryParams.append("endDate", params.endDate);
   if (params.reviewStatus) queryParams.append("reviewStatus", params.reviewStatus);
   if (params.reviewTag) queryParams.append("reviewTag", params.reviewTag);
-  if (params.goalNumber) queryParams.append("goalNumber", params.goalNumber);
-  if (params.clientSearch) queryParams.append("clientSearch", params.clientSearch);
+  if (params.search) queryParams.append("search", params.search);
   if (params.resolutionStatus) queryParams.append("resolutionStatus", params.resolutionStatus);
 
   const response = await fetch(`${API_URL}/api/goal-comparison/variance-transactions/export?${queryParams}`);

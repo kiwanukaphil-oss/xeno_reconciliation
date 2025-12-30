@@ -131,9 +131,7 @@ export class SmartMatcher {
     startDate: string,
     endDate: string,
     filters?: {
-      goalNumber?: string;
-      accountNumber?: string;
-      clientSearch?: string;
+      search?: string;
       status?: 'ALL' | 'MATCHED' | 'VARIANCE' | 'REVIEWED' | 'UNREVIEWED' | 'PARTIAL';
     }
   ): Promise<{ data: GoalSummary[]; total: number }> {
@@ -142,22 +140,10 @@ export class SmartMatcher {
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
-    // Build optional filters
-    if (filters?.goalNumber) {
-      conditions.push(`g."goalNumber" ILIKE $${paramIndex}`);
-      params.push(`%${filters.goalNumber}%`);
-      paramIndex++;
-    }
-
-    if (filters?.accountNumber) {
-      conditions.push(`a."accountNumber" ILIKE $${paramIndex}`);
-      params.push(`%${filters.accountNumber}%`);
-      paramIndex++;
-    }
-
-    if (filters?.clientSearch) {
-      conditions.push(`c."clientName" ILIKE $${paramIndex}`);
-      params.push(`%${filters.clientSearch}%`);
+    // Build optional filters - unified search across goalNumber, accountNumber, and clientName
+    if (filters?.search) {
+      conditions.push(`(g."goalNumber" ILIKE $${paramIndex} OR a."accountNumber" ILIKE $${paramIndex} OR c."clientName" ILIKE $${paramIndex})`);
+      params.push(`%${filters.search}%`);
       paramIndex++;
     }
 
@@ -429,9 +415,7 @@ export class SmartMatcher {
     startDate: string,
     endDate: string,
     filters?: {
-      goalNumber?: string;
-      accountNumber?: string;
-      clientSearch?: string;
+      search?: string;
       status?: 'ALL' | 'MATCHED' | 'VARIANCE' | 'REVIEWED';
     }
   ): Promise<{ data: FundSummary[]; total: number }> {
@@ -440,22 +424,10 @@ export class SmartMatcher {
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
-    // Build optional filters
-    if (filters?.goalNumber) {
-      conditions.push(`g."goalNumber" ILIKE $${paramIndex}`);
-      params.push(`%${filters.goalNumber}%`);
-      paramIndex++;
-    }
-
-    if (filters?.accountNumber) {
-      conditions.push(`a."accountNumber" ILIKE $${paramIndex}`);
-      params.push(`%${filters.accountNumber}%`);
-      paramIndex++;
-    }
-
-    if (filters?.clientSearch) {
-      conditions.push(`c."clientName" ILIKE $${paramIndex}`);
-      params.push(`%${filters.clientSearch}%`);
+    // Build optional filters - unified search across goalNumber, accountNumber, and clientName
+    if (filters?.search) {
+      conditions.push(`(g."goalNumber" ILIKE $${paramIndex} OR a."accountNumber" ILIKE $${paramIndex} OR c."clientName" ILIKE $${paramIndex})`);
+      params.push(`%${filters.search}%`);
       paramIndex++;
     }
 
@@ -584,14 +556,13 @@ export class SmartMatcher {
    * Get account-level fund summary aggregating all goals within each account
    * @param startDate - Start date as YYYY-MM-DD string
    * @param endDate - End date as YYYY-MM-DD string
-   * @param filters - Optional filters for accountNumber, clientSearch, status
+   * @param filters - Optional filters for search and status
    */
   static async getAccountFundSummary(
     startDate: string,
     endDate: string,
     filters?: {
-      accountNumber?: string;
-      clientSearch?: string;
+      search?: string;
       status?: 'ALL' | 'MATCHED' | 'VARIANCE';
     }
   ): Promise<{ data: AccountFundSummary[]; total: number }> {
@@ -599,16 +570,10 @@ export class SmartMatcher {
     const params: any[] = [startDate, endDate];
     let paramIndex = 3;
 
-    // Build optional filters
-    if (filters?.accountNumber) {
-      conditions.push(`a."accountNumber" ILIKE $${paramIndex}`);
-      params.push(`%${filters.accountNumber}%`);
-      paramIndex++;
-    }
-
-    if (filters?.clientSearch) {
-      conditions.push(`c."clientName" ILIKE $${paramIndex}`);
-      params.push(`%${filters.clientSearch}%`);
+    // Build optional filters - unified search across accountNumber and clientName
+    if (filters?.search) {
+      conditions.push(`(a."accountNumber" ILIKE $${paramIndex} OR c."clientName" ILIKE $${paramIndex})`);
+      params.push(`%${filters.search}%`);
       paramIndex++;
     }
 
@@ -1530,8 +1495,7 @@ export class SmartMatcher {
     filters?: {
       reviewStatus?: 'PENDING' | 'REVIEWED' | 'ALL';
       reviewTag?: string;
-      goalNumber?: string;
-      clientSearch?: string;
+      search?: string;
       resolutionStatus?: 'RESOLVED' | 'PENDING' | 'ALL';
       transactionSource?: 'BANK' | 'GOAL';
     }
@@ -1605,10 +1569,10 @@ export class SmartMatcher {
 
     logger.info(`getVarianceTransactions: Found ${goalsWithVariance.length} goals with potential variance (out of all goals)`);
 
-    // Apply goal number filter early
+    // Apply search filter early (goal number matching)
     let varianceGoals = goalsWithVariance;
-    if (filters?.goalNumber) {
-      const searchTerm = filters.goalNumber.toLowerCase();
+    if (filters?.search) {
+      const searchTerm = filters.search.toLowerCase();
       varianceGoals = varianceGoals.filter(g => g.goal_number.toLowerCase().includes(searchTerm));
     }
 
@@ -1960,9 +1924,14 @@ export class SmartMatcher {
 
     let results = [...unmatchedBankData, ...unmatchedGoalData];
 
-    if (filters?.clientSearch) {
-      const searchTerm = filters.clientSearch.toLowerCase();
-      results = results.filter(r => r.client_name.toLowerCase().includes(searchTerm));
+    // Apply search filter (search across client name, goal number, account number)
+    if (filters?.search) {
+      const searchTerm = filters.search.toLowerCase();
+      results = results.filter(r =>
+        r.client_name.toLowerCase().includes(searchTerm) ||
+        r.goal_number.toLowerCase().includes(searchTerm) ||
+        (r.account_number && r.account_number.toLowerCase().includes(searchTerm))
+      );
     }
 
     if (filters?.reviewTag) {

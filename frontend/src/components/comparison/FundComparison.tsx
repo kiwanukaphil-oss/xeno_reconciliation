@@ -126,9 +126,7 @@ const FundComparison = () => {
   // Filter state
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [goalNumber, setGoalNumber] = useState("");
-  const [accountNumber, setAccountNumber] = useState("");
-  const [clientSearch, setClientSearch] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
   const [status, setStatus] = useState("ALL");
 
   // Sorting state - Goal tab
@@ -212,9 +210,7 @@ const FundComparison = () => {
       const result = await fetchFundComparison({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
-        goalNumber: goalNumber || undefined,
-        accountNumber: accountNumber || undefined,
-        clientSearch: clientSearch || undefined,
+        search: searchTerm || undefined,
         status: status !== "ALL" ? status : undefined,
         page,
         limit: pagination.limit,
@@ -236,8 +232,7 @@ const FundComparison = () => {
       const result = await fetchAccountFundComparison({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
-        accountNumber: accountNumber || undefined,
-        clientSearch: clientSearch || undefined,
+        search: searchTerm || undefined,
         status: status !== "ALL" ? status : undefined,
         page,
         limit: accountPagination.limit,
@@ -261,9 +256,7 @@ const FundComparison = () => {
   };
 
   const handleReset = () => {
-    setGoalNumber("");
-    setAccountNumber("");
-    setClientSearch("");
+    setSearchTerm("");
     setStatus("ALL");
     const end = new Date();
     const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
@@ -282,9 +275,7 @@ const FundComparison = () => {
       await exportFundComparisonCSV({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
-        goalNumber: goalNumber || undefined,
-        accountNumber: accountNumber || undefined,
-        clientSearch: clientSearch || undefined,
+        search: searchTerm || undefined,
         status: status !== "ALL" ? status : undefined,
       });
     } catch (err) {
@@ -330,11 +321,11 @@ const FundComparison = () => {
     setAccountDrilldownLoading(true);
 
     try {
-      // Fetch goals for this account
+      // Fetch goals for this account - use account number as search term
       const result = await fetchFundComparison({
         startDate,
         endDate,
-        accountNumber: row.accountNumber,
+        search: row.accountNumber,
         limit: 100, // Get all goals for this account
       });
       setAccountDrilldownData(result.data);
@@ -493,43 +484,15 @@ const FundComparison = () => {
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
             />
           </div>
-          {activeTab === 'goal' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Goal Number
-              </label>
-              <input
-                type="text"
-                value={goalNumber}
-                onChange={(e) => setGoalNumber(e.target.value)}
-                placeholder="e.g., 701-123a"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
-              />
-            </div>
-          )}
-          {activeTab === 'account' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Account Number
-              </label>
-              <input
-                type="text"
-                value={accountNumber}
-                onChange={(e) => setAccountNumber(e.target.value)}
-                placeholder="e.g., 701-123456"
-                className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
-              />
-            </div>
-          )}
-          <div>
+          <div className="md:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Client Search
+              Search
             </label>
             <input
               type="text"
-              value={clientSearch}
-              onChange={(e) => setClientSearch(e.target.value)}
-              placeholder="Client name..."
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search by client, account, or goal..."
               className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500"
             />
           </div>

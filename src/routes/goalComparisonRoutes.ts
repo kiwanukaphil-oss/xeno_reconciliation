@@ -16,9 +16,7 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
   try {
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
-    const goalNumber = req.query.goalNumber as string;
-    const accountNumber = req.query.accountNumber as string;
-    const clientSearch = req.query.clientSearch as string;
+    const search = req.query.search as string;
     const status = req.query.status as 'ALL' | 'MATCHED' | 'VARIANCE';
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 50;
@@ -31,13 +29,11 @@ router.get('/', async (req: Request, res: Response, next: NextFunction) => {
     logger.info('Fetching goal comparison summary', {
       startDate: startDateStr,
       endDate: endDateStr,
-      filters: { goalNumber, accountNumber, clientSearch, status },
+      filters: { search, status },
     });
 
     const result = await SmartMatcher.getGoalSummary(startDateStr, endDateStr, {
-      goalNumber,
-      accountNumber,
-      clientSearch,
+      search,
       status,
     });
 
@@ -205,9 +201,7 @@ router.get('/fund-summary', async (req: Request, res: Response, next: NextFuncti
   try {
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
-    const goalNumber = req.query.goalNumber as string;
-    const accountNumber = req.query.accountNumber as string;
-    const clientSearch = req.query.clientSearch as string;
+    const search = req.query.search as string;
     const status = req.query.status as 'ALL' | 'MATCHED' | 'VARIANCE';
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 50;
@@ -220,13 +214,11 @@ router.get('/fund-summary', async (req: Request, res: Response, next: NextFuncti
     logger.info('Fetching fund comparison summary', {
       startDate: startDateStr,
       endDate: endDateStr,
-      filters: { goalNumber, accountNumber, clientSearch, status },
+      filters: { search, status },
     });
 
     const result = await SmartMatcher.getFundSummary(startDateStr, endDateStr, {
-      goalNumber,
-      accountNumber,
-      clientSearch,
+      search,
       status,
     });
 
@@ -314,8 +306,7 @@ router.get('/fund-summary/by-account', async (req: Request, res: Response, next:
   try {
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
-    const accountNumber = req.query.accountNumber as string;
-    const clientSearch = req.query.clientSearch as string;
+    const search = req.query.search as string;
     const status = req.query.status as 'ALL' | 'MATCHED' | 'VARIANCE';
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 50;
@@ -327,12 +318,11 @@ router.get('/fund-summary/by-account', async (req: Request, res: Response, next:
     logger.info('Fetching account-level fund comparison summary', {
       startDate: startDateStr,
       endDate: endDateStr,
-      filters: { accountNumber, clientSearch, status },
+      filters: { search, status },
     });
 
     const result = await SmartMatcher.getAccountFundSummary(startDateStr, endDateStr, {
-      accountNumber,
-      clientSearch,
+      search,
       status,
     });
 
@@ -426,9 +416,7 @@ router.get('/fund-summary/export/csv', async (req: Request, res: Response, next:
   try {
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
-    const goalNumber = req.query.goalNumber as string;
-    const accountNumber = req.query.accountNumber as string;
-    const clientSearch = req.query.clientSearch as string;
+    const search = req.query.search as string;
     const status = req.query.status as 'ALL' | 'MATCHED' | 'VARIANCE';
 
     // Default to last 30 days if no dates provided
@@ -437,9 +425,7 @@ router.get('/fund-summary/export/csv', async (req: Request, res: Response, next:
     const startDateStr = startDate || new Date(new Date(endDateStr).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     const result = await SmartMatcher.getFundSummary(startDateStr, endDateStr, {
-      goalNumber,
-      accountNumber,
-      clientSearch,
+      search,
       status,
     });
 
@@ -510,9 +496,7 @@ router.get('/export/csv', async (req: Request, res: Response, next: NextFunction
   try {
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
-    const goalNumber = req.query.goalNumber as string;
-    const accountNumber = req.query.accountNumber as string;
-    const clientSearch = req.query.clientSearch as string;
+    const search = req.query.search as string;
     const status = req.query.status as 'ALL' | 'MATCHED' | 'VARIANCE';
 
     // Default to last 30 days if no dates provided
@@ -521,9 +505,7 @@ router.get('/export/csv', async (req: Request, res: Response, next: NextFunction
     const startDateStr = startDate || new Date(new Date(endDateStr).getTime() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0];
 
     const result = await SmartMatcher.getGoalSummary(startDateStr, endDateStr, {
-      goalNumber,
-      accountNumber,
-      clientSearch,
+      search,
       status,
     });
 
@@ -952,8 +934,7 @@ router.get('/variance-transactions', async (req: Request, res: Response, next: N
     const endDate = req.query.endDate as string;
     const reviewStatus = req.query.reviewStatus as 'PENDING' | 'REVIEWED' | 'ALL';
     const reviewTag = req.query.reviewTag as string;
-    const goalNumber = req.query.goalNumber as string;
-    const clientSearch = req.query.clientSearch as string;
+    const search = req.query.search as string;
     const resolutionStatus = req.query.resolutionStatus as 'RESOLVED' | 'PENDING' | 'ALL';
     const transactionSource = req.query.transactionSource as 'BANK' | 'GOAL' | undefined;
     const page = parseInt(req.query.page as string) || 1;
@@ -966,8 +947,7 @@ router.get('/variance-transactions', async (req: Request, res: Response, next: N
     const result = await SmartMatcher.getVarianceTransactions(startDateStr, endDateStr, {
       reviewStatus,
       reviewTag,
-      goalNumber,
-      clientSearch,
+      search,
       resolutionStatus,
       transactionSource,
     });
@@ -1007,8 +987,7 @@ router.get('/variance-transactions/export', async (req: Request, res: Response, 
     const endDate = req.query.endDate as string;
     const reviewStatus = req.query.reviewStatus as 'PENDING' | 'REVIEWED' | 'ALL';
     const reviewTag = req.query.reviewTag as string;
-    const goalNumber = req.query.goalNumber as string;
-    const clientSearch = req.query.clientSearch as string;
+    const search = req.query.search as string;
     const resolutionStatus = req.query.resolutionStatus as 'RESOLVED' | 'PENDING' | 'ALL';
     const transactionSource = req.query.transactionSource as 'BANK' | 'GOAL' | undefined;
 
@@ -1019,8 +998,7 @@ router.get('/variance-transactions/export', async (req: Request, res: Response, 
     const result = await SmartMatcher.getVarianceTransactions(startDateStr, endDateStr, {
       reviewStatus,
       reviewTag,
-      goalNumber,
-      clientSearch,
+      search,
       resolutionStatus,
       transactionSource,
     });

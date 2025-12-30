@@ -204,9 +204,7 @@ const GoalComparison = () => {
   // Filter state
   const [startDate, setStartDate] = useState("");
   const [endDate, setEndDate] = useState("");
-  const [goalNumber, setGoalNumber] = useState("");
-  const [accountNumber, setAccountNumber] = useState("");
-  const [clientSearch, setClientSearch] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
   const [status, setStatus] = useState("ALL");
 
   // Expanded rows / drilldown state
@@ -272,9 +270,7 @@ const GoalComparison = () => {
       const result = await fetchGoalComparison({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
-        goalNumber: goalNumber || undefined,
-        accountNumber: accountNumber || undefined,
-        clientSearch: clientSearch || undefined,
+        search: searchTerm || undefined,
         status: status !== "ALL" ? status : undefined,
         page,
         limit: pagination.limit,
@@ -296,9 +292,7 @@ const GoalComparison = () => {
       const result = await fetchFundComparison({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
-        goalNumber: goalNumber || undefined,
-        accountNumber: accountNumber || undefined,
-        clientSearch: clientSearch || undefined,
+        search: searchTerm || undefined,
         status: status !== "ALL" ? status : undefined,
         page,
         limit: fundPagination.limit,
@@ -320,8 +314,7 @@ const GoalComparison = () => {
       const result = await fetchVarianceTransactions({
         startDate: startDate || undefined,
         endDate: endDate || undefined,
-        goalNumber: goalNumber || undefined,
-        clientSearch: clientSearch || undefined,
+        search: searchTerm || undefined,
         reviewStatus: varianceReviewStatus !== 'ALL' ? varianceReviewStatus : undefined,
         reviewTag: varianceTagFilter || undefined,
         resolutionStatus: varianceResolutionStatus !== 'ALL' ? varianceResolutionStatus : undefined,
@@ -680,9 +673,7 @@ const GoalComparison = () => {
     const start = new Date(end.getTime() - 30 * 24 * 60 * 60 * 1000);
     setEndDate(end.toISOString().split("T")[0]);
     setStartDate(start.toISOString().split("T")[0]);
-    setGoalNumber("");
-    setAccountNumber("");
-    setClientSearch("");
+    setSearchTerm("");
     setStatus("ALL");
     setVarianceReviewStatus('ALL');
     setVarianceTagFilter('');
@@ -706,26 +697,21 @@ const GoalComparison = () => {
         await exportGoalComparisonCSV({
           startDate: startDate || undefined,
           endDate: endDate || undefined,
-          goalNumber: goalNumber || undefined,
-          accountNumber: accountNumber || undefined,
-          clientSearch: clientSearch || undefined,
+          search: searchTerm || undefined,
           status: status !== "ALL" ? status : undefined,
         });
       } else if (activeTab === 'fund') {
         await exportFundComparisonCSV({
           startDate: startDate || undefined,
           endDate: endDate || undefined,
-          goalNumber: goalNumber || undefined,
-          accountNumber: accountNumber || undefined,
-          clientSearch: clientSearch || undefined,
+          search: searchTerm || undefined,
           status: status !== "ALL" ? status : undefined,
         });
       } else {
         await exportVarianceTransactionsExcel({
           startDate: startDate || undefined,
           endDate: endDate || undefined,
-          goalNumber: goalNumber || undefined,
-          clientSearch: clientSearch || undefined,
+          search: searchTerm || undefined,
           reviewStatus: varianceReviewStatus !== 'ALL' ? varianceReviewStatus : undefined,
           reviewTag: varianceTagFilter || undefined,
           resolutionStatus: varianceResolutionStatus !== 'ALL' ? varianceResolutionStatus : undefined,
@@ -1035,7 +1021,7 @@ const GoalComparison = () => {
 
       {/* Filters */}
       <div className="bg-white border border-gray-200 rounded-lg p-4 mb-6">
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4">
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
           {/* Start Date */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-1">
@@ -1068,46 +1054,18 @@ const GoalComparison = () => {
             </div>
           </div>
 
-          {/* Goal Number */}
-          <div>
+          {/* Unified Search */}
+          <div className="md:col-span-2">
             <label className="block text-sm font-medium text-gray-700 mb-1">
-              Goal Number
-            </label>
-            <input
-              type="text"
-              value={goalNumber}
-              onChange={(e) => setGoalNumber(e.target.value)}
-              placeholder="e.g., 701-123..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          {/* Account Number */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Account Number
-            </label>
-            <input
-              type="text"
-              value={accountNumber}
-              onChange={(e) => setAccountNumber(e.target.value)}
-              placeholder="e.g., 701-..."
-              className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
-            />
-          </div>
-
-          {/* Client Search */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              Client Name
+              Search
             </label>
             <div className="relative">
               <Search className="absolute left-3 top-1/2 transform -translate-y-1/2 h-4 w-4 text-gray-400" />
               <input
                 type="text"
-                value={clientSearch}
-                onChange={(e) => setClientSearch(e.target.value)}
-                placeholder="Search client..."
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+                placeholder="Search by client, account, or goal..."
                 className="w-full pl-10 pr-3 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500"
               />
             </div>
