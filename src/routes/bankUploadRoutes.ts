@@ -1,6 +1,6 @@
 import express, { Request, Response, NextFunction } from 'express';
 import { upload, handleUploadErrors } from '../middleware/upload';
-import { AppError } from '../middleware/errorHandler';
+import { BadRequestError, NotFoundError, ValidationError } from '../errors';
 import { logger } from '../config/logger';
 import { bankReconciliationQueue, JobNames } from '../config/queue';
 import { BankUploadBatchManager } from '../services/bank-upload/database/BankUploadBatchManager';
@@ -72,7 +72,7 @@ router.post(
   async (req: Request, res: Response, next: NextFunction) => {
     try {
       if (!req.file) {
-        throw new AppError(400, 'No file uploaded');
+        throw new BadRequestError('No file uploaded');
       }
 
       const uploadedBy = req.body.uploadedBy || 'system';
@@ -83,7 +83,7 @@ router.post(
       // Validate file before processing
       const validation = await BankFileProcessor.validateFile(req.file.path);
       if (!validation.isValid) {
-        throw new AppError(400, `File validation failed: ${validation.errors.join(', ')}`);
+        throw new ValidationError(`File validation failed: ${validation.errors.join(', ')}`);
       }
 
       // Create upload batch
@@ -135,7 +135,7 @@ router.get('/batches/:batchId/status', async (req: Request, res: Response, next:
 
     const batch = await BankUploadBatchManager.getBatchSummary(batchId);
     if (!batch) {
-      throw new AppError(404, 'Batch not found');
+      throw new NotFoundError('Batch', batchId);
     }
 
     res.json({
@@ -166,7 +166,7 @@ router.get('/batches/:batchId/summary', async (req: Request, res: Response, next
 
     const batch = await BankUploadBatchManager.getBatchSummary(batchId);
     if (!batch) {
-      throw new AppError(404, 'Batch not found');
+      throw new NotFoundError('Batch', batchId);
     }
 
     res.json(batch);
@@ -185,7 +185,7 @@ router.post('/batches/:batchId/cancel', async (req: Request, res: Response, next
 
     const batch = await BankUploadBatchManager.getBatch(batchId);
     if (!batch) {
-      throw new AppError(404, 'Batch not found');
+      throw new NotFoundError('Batch', batchId);
     }
 
     // Cancel the batch
@@ -219,7 +219,7 @@ router.delete('/batches/:batchId/rollback', async (req: Request, res: Response, 
 
     const batch = await BankUploadBatchManager.getBatch(batchId);
     if (!batch) {
-      throw new AppError(404, 'Batch not found');
+      throw new NotFoundError('Batch', batchId);
     }
 
     // Remove job from queue if exists
@@ -334,7 +334,7 @@ router.get('/transactions/:transactionId', async (req: Request, res: Response, n
 
     const transaction = await BankTransactionRepository.getTransactionById(transactionId);
     if (!transaction) {
-      throw new AppError(404, 'Transaction not found');
+      throw new NotFoundError('Transaction', transactionId);
     }
 
     res.json(transaction);
@@ -353,7 +353,7 @@ router.patch('/transactions/:transactionId/status', async (req: Request, res: Re
     const { status, notes, updatedBy } = req.body;
 
     if (!status) {
-      throw new AppError(400, 'Status is required');
+      throw new BadRequestError('Status is required');
     }
 
     // Validate status value
@@ -369,7 +369,7 @@ router.patch('/transactions/:transactionId/status', async (req: Request, res: Re
     ];
 
     if (!validStatuses.includes(status)) {
-      throw new AppError(400, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+      throw new ValidationError(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
     }
 
     const result = await BankTransactionRepository.updateTransactionStatus(
@@ -398,11 +398,11 @@ router.post('/transactions/bulk-status', async (req: Request, res: Response, nex
     const { transactionIds, status, notes, updatedBy } = req.body;
 
     if (!transactionIds || !Array.isArray(transactionIds) || transactionIds.length === 0) {
-      throw new AppError(400, 'transactionIds array is required');
+      throw new BadRequestError('transactionIds array is required');
     }
 
     if (!status) {
-      throw new AppError(400, 'Status is required');
+      throw new BadRequestError('Status is required');
     }
 
     // Validate status value
@@ -418,7 +418,7 @@ router.post('/transactions/bulk-status', async (req: Request, res: Response, nex
     ];
 
     if (!validStatuses.includes(status)) {
-      throw new AppError(400, `Invalid status. Must be one of: ${validStatuses.join(', ')}`);
+      throw new ValidationError(`Invalid status. Must be one of: ${validStatuses.join(', ')}`);
     }
 
     const result = await BankTransactionRepository.bulkUpdateTransactionStatus(

@@ -933,8 +933,8 @@ npm test -- --watch
 | 6. SQL Pagination | Not Started | - | - |
 | 7. Config Externalization | Not Started | - | - |
 | 8. View Refresh Status | Not Started | - | - |
-| 9. Error Handling | Not Started | - | - |
-| 10. Request IDs | Not Started | - | - |
+| 9. Error Handling | **COMPLETED** | Claude | 2025-12-30 |
+| 10. Request IDs | **COMPLETED** | Claude | 2025-12-30 |
 | 11. Error Boundaries | Not Started | - | - |
 | 12. API Documentation | Not Started | - | - |
 
@@ -952,6 +952,49 @@ npm test -- --watch
 - Dynamic property access - 3 casts in GoalTransactionService
 
 **Note:** Remaining casts are acceptable patterns that would require significant refactoring (defining interfaces for each raw SQL query result) with minimal benefit.
+
+### Request ID Implementation (Issue #10)
+
+**Completed:**
+- ✅ Created `src/middleware/requestId.ts` with AsyncLocalStorage for request context
+- ✅ Generates UUID for each request (or uses `x-request-id` header if provided)
+- ✅ Extended Express Request type globally with `requestId` property
+- ✅ Updated `src/config/logger.ts` to include requestId in all log entries
+- ✅ Updated `src/middleware/errorHandler.ts` to include requestId in all error responses
+- ✅ Added response timing to request logging in `src/app.ts`
+
+**Usage:**
+```typescript
+// In any service file
+import { getRequestId } from '../middleware/requestId';
+logger.info('Processing', { requestId: getRequestId() });
+```
+
+### Error Handling Standardization (Issue #9)
+
+**Completed:**
+- ✅ Created `src/errors/index.ts` with specialized error classes:
+  - `BadRequestError` (400) - Invalid request syntax
+  - `ValidationError` (400) - Data validation failures
+  - `NotFoundError` (404) - Resource not found
+  - `ConflictError` (409) - Duplicate/conflict
+  - `UnprocessableEntityError` (422) - Valid syntax, cannot process
+  - `DatabaseError` (500) - Database operation failed
+  - `BusinessRuleError` (400) - Business logic violations
+  - `ProcessingError` (500) - Background processing failures
+- ✅ Added `ErrorCode` enum for programmatic error handling
+- ✅ Updated `errorHandler` middleware with Prisma error code mapping
+- ✅ All error responses now include: `error`, `message`, `code`, `statusCode`, `requestId`, `details?`
+- ✅ Updated `bankUploadRoutes.ts` as reference implementation
+
+**Usage:**
+```typescript
+import { NotFoundError, ValidationError, BadRequestError } from '../errors';
+
+throw new NotFoundError('Batch', batchId);  // "Batch with ID 'abc123' not found"
+throw new ValidationError('Invalid status', { allowed: validStatuses });
+throw new BadRequestError('File is required');
+```
 
 ---
 

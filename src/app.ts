@@ -3,6 +3,7 @@ import cors from 'cors';
 import { config } from './config/env';
 import { logger } from './config/logger';
 import { errorHandler, notFoundHandler } from './middleware/errorHandler';
+import { requestIdMiddleware } from './middleware/requestId';
 
 // Import routes
 import fundUploadRoutes from './routes/fundUploadRoutes';
@@ -23,9 +24,23 @@ app.use(cors());
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 
-// Request logging
-app.use((req, _res, next) => {
-  logger.info(`${req.method} ${req.path}`);
+// Request ID middleware - must be before request logging
+app.use(requestIdMiddleware);
+
+// Request logging with request ID and response timing
+app.use((req, res, next) => {
+  const start = Date.now();
+  logger.info(`${req.method} ${req.path} started`);
+
+  // Log response when finished
+  res.on('finish', () => {
+    const duration = Date.now() - start;
+    logger.info(`${req.method} ${req.path} completed`, {
+      statusCode: res.statusCode,
+      duration: `${duration}ms`,
+    });
+  });
+
   next();
 });
 
