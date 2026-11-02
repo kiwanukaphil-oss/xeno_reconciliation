@@ -2,6 +2,8 @@ import { NextFunction, Request, Response, Router } from 'express';
 import { BadRequestError } from '../errors';
 import { ClientInsightsService, InsightSegment } from '../services/client-insights/ClientInsightsService';
 import { ImpactPackService } from '../services/client-insights/ImpactPackService';
+import { GoalRiskService } from '../services/client-insights/GoalRiskService';
+import { GroupSchemeService } from '../services/client-insights/GroupSchemeService';
 import { writeImpactPackWorkbook } from '../services/client-insights/ImpactPackExcelExporter';
 
 const router = Router();
@@ -11,6 +13,10 @@ function readSegment(req: Request): InsightSegment {
   const segment = String(req.query.segment ?? 'INDIVIDUAL').toUpperCase() as InsightSegment;
   if (!SEGMENTS.includes(segment)) throw new BadRequestError(`segment must be one of ${SEGMENTS.join(', ')}`);
   return segment;
+}
+
+function readLimit(req: Request, fallback: number): number {
+  return Math.min(Math.max(parseInt(String(req.query.limit ?? fallback), 10) || fallback, 1), 500);
 }
 
 /**
@@ -31,8 +37,43 @@ router.get('/summary', async (req: Request, res: Response, next: NextFunction) =
  */
 router.get('/data-quality', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const limit = Math.min(Math.max(parseInt(String(req.query.limit ?? '50'), 10) || 50, 1), 500);
-    res.json(await ClientInsightsService.getDataQuality(readSegment(req), limit));
+    res.json(await ClientInsightsService.getDataQuality(readSegment(req), readLimit(req, 50)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/client-insights/risk-allocation?segment=...&limit=50
+ * AUM by risk score and goal category, drift from target fund split, largest drifted goals
+ */
+router.get('/risk-allocation', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await GoalRiskService.getRiskAllocation(readSegment(req), readLimit(req, 50)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/client-insights/suitability?limit=50
+ * Goals/accounts flagged by the suitability review rules (individuals)
+ */
+router.get('/suitability', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await GoalRiskService.getSuitabilityReview(readLimit(req, 50)));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/client-insights/group-schemes
+ * Member accounts rolled up by sponsor (SACCOs, clubs, schemes, family groups)
+ */
+router.get('/group-schemes', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await GroupSchemeService.getGroupSchemes());
   } catch (error) {
     next(error);
   }

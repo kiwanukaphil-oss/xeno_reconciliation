@@ -1,4 +1,13 @@
 // Formatting shared by the Client Insights, Profile Data Quality and Impact Pack pages
+import type { InsightSegment } from "../../services/api";
+
+export const SEGMENT_OPTIONS: Array<{ value: InsightSegment; label: string }> = [
+  { value: "INDIVIDUAL", label: "Individuals" },
+  { value: "INSTITUTIONAL", label: "Institutions" },
+  { value: "ALL", label: "All accounts" },
+];
+
+export const FUND_CODES = ["XUMMF", "XUBF", "XUDEF", "XUREF"] as const;
 
 const LABEL_OVERRIDES: Record<string, string> = {
   UNKNOWN: "Unknown",

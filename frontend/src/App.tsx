@@ -20,6 +20,8 @@ import {
   PieChart,
   ClipboardList,
   FileSpreadsheet,
+  ShieldCheck,
+  Network,
 } from "lucide-react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
@@ -40,6 +42,8 @@ import FundComparison from "./components/comparison/FundComparison";
 import ClientInsights from "./components/client-insights/ClientInsights";
 import ProfileDataQuality from "./components/client-insights/ProfileDataQuality";
 import ImpactPack from "./components/client-insights/ImpactPack";
+import RiskAllocation from "./components/client-insights/RiskAllocation";
+import GroupSchemes from "./components/client-insights/GroupSchemes";
 
 interface MenuItem {
   id: string;
@@ -143,6 +147,18 @@ const App = () => {
           description: "AUM by gender, age, location, channel and saving behaviour",
         },
         {
+          id: "risk-allocation",
+          name: "Risk & Allocation",
+          icon: ShieldCheck,
+          description: "Value by risk score and goal, drift from target split, suitability review",
+        },
+        {
+          id: "group-schemes",
+          name: "Group Schemes",
+          icon: Network,
+          description: "Member accounts rolled up by SACCO, club, scheme and family sponsor",
+        },
+        {
           id: "profile-data-quality",
           name: "Profile Data Quality",
           icon: ClipboardList,
@@ -221,6 +237,10 @@ const App = () => {
         return <BankTransactions />;
       case "client-insights":
         return <ClientInsights />;
+      case "risk-allocation":
+        return <RiskAllocation />;
+      case "group-schemes":
+        return <GroupSchemes />;
       case "profile-data-quality":
         return <ProfileDataQuality />;
       case "impact-pack":

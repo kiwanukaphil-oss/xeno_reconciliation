@@ -33,8 +33,8 @@ async function runClientProfileImport() {
   try {
     const report = await ClientProfileImporter.importFromFiles(files, { dryRun, asOfDate });
     if (!dryRun) {
-      console.log('Refreshing account_profile_aum view...');
-      await MaterializedViewService.refreshAccountProfileAum();
+      console.log('Refreshing account_profile_aum and goal_holdings views...');
+      await MaterializedViewService.refreshClientInsightViews();
     }
     const reportPath = path.join('logs', `client-profile-import-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
     fs.mkdirSync('logs', { recursive: true });
@@ -69,7 +69,10 @@ function findExcelFiles(folder: string): string[] {
   });
 }
 
-runClientProfileImport().catch((error) => {
-  console.error('Client profile import failed:', error);
-  process.exit(1);
-});
+// Explicit exit: importing MaterializedViewService opens the queue's Redis connection, which would keep the process alive
+runClientProfileImport()
+  .then(() => process.exit(0))
+  .catch((error) => {
+    console.error('Client profile import failed:', error);
+    process.exit(1);
+  });

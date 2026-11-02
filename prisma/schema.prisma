@@ -78,6 +78,10 @@ model Goal {
 
   // Enrichment from the Ultima client data export
   riskScore        Int?     // 0-10 onboarding questionnaire score; higher = more equity allocation
+  // Ultima's current deposit allocation for the goal (percent per fund), e.g.
+  // { "XUMMF": 18.4, "XUBF": 73.6, "XUDEF": 2.4, "XUREF": 5.6 }. Unlike fundDistribution
+  // (derived from the first uploaded transaction), this is the intended target.
+  targetFundSplit  Json?
   ultimaGoalName   String?  // Raw Ultima goal category, e.g. WEALTH, HOME, EMERGENCIES, Custom Goal
   sponsorTitle     String?
   ultimaEnabled    Boolean?

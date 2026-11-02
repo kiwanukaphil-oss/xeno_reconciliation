@@ -58,6 +58,16 @@ export class MaterializedViewService {
         failed.push('account_profile_aum');
       }
 
+      // Refresh goal_holdings (per-goal fund values and drift from target split)
+      try {
+        await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY goal_holdings`;
+        refreshed.push('goal_holdings');
+        logger.info('✅ goal_holdings refreshed');
+      } catch (error: any) {
+        logger.error('❌ Failed to refresh goal_holdings:', error);
+        failed.push('goal_holdings');
+      }
+
       const duration = Date.now() - startTime;
       logger.info(`All materialized views refreshed in ${duration}ms (${refreshed.length} succeeded, ${failed.length} failed)`);
 
@@ -105,8 +115,8 @@ export class MaterializedViewService {
       // Refresh the materialized view concurrently (non-blocking)
       // CONCURRENTLY allows queries to continue during refresh
       await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY account_unit_balances`;
-      // Dependent view: client profiles joined to balances
-      await this.refreshAccountProfileAum();
+      // Dependent views: client profiles joined to balances, and per-goal holdings
+      await this.refreshClientInsightViews();
 
       const duration = Date.now() - startTime;
       logger.info(`Materialized view refreshed successfully in ${duration}ms`);
@@ -131,12 +141,14 @@ export class MaterializedViewService {
   }
 
   /**
-   * Refresh account_profile_aum (balances + saving activity + Ultima profile per account).
+   * Refresh the Client Insights views: account_profile_aum (balances + saving activity +
+   * Ultima profile per account) and goal_holdings (per-goal fund values and drift).
    * Call after account_unit_balances, and after a client profile import.
    */
-  static async refreshAccountProfileAum(): Promise<void> {
+  static async refreshClientInsightViews(): Promise<void> {
     await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY account_profile_aum`;
-    logger.info('account_profile_aum refreshed');
+    await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY goal_holdings`;
+    logger.info('account_profile_aum and goal_holdings refreshed');
   }
 
   /**

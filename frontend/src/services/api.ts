@@ -226,6 +226,21 @@ export const fetchProfileDataQuality = async (segment: InsightSegment, limit = 5
   return handleResponse(response);
 };
 
+export const fetchRiskAllocation = async (segment: InsightSegment, limit = 50) => {
+  const response = await fetch(`${API_URL}/api/client-insights/risk-allocation?segment=${segment}&limit=${limit}`);
+  return handleResponse(response);
+};
+
+export const fetchSuitabilityReview = async (limit = 50) => {
+  const response = await fetch(`${API_URL}/api/client-insights/suitability?limit=${limit}`);
+  return handleResponse(response);
+};
+
+export const fetchGroupSchemes = async () => {
+  const response = await fetch(`${API_URL}/api/client-insights/group-schemes`);
+  return handleResponse(response);
+};
+
 export const fetchImpactPack = async () => {
   const response = await fetch(`${API_URL}/api/client-insights/impact-pack`);
   return handleResponse(response);

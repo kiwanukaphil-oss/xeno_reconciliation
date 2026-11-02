@@ -2,7 +2,8 @@ import { useEffect, useState } from "react";
 import { Info, Loader2 } from "lucide-react";
 import { fetchClientInsightsSummary, type InsightSegment } from "../../services/api";
 import { BreakdownBarList, type Breakdown, type InsightMetric } from "./BreakdownBarList";
-import { formatCount, formatDate, formatPct, formatUGXCompact } from "./insightFormat";
+import { formatCount, formatDate, formatPct, formatUGXCompact, SEGMENT_OPTIONS } from "./insightFormat";
+import { StatTile, ToggleGroup } from "./InsightControls";
 
 interface InsightsSummary {
   segment: InsightSegment;
@@ -18,12 +19,6 @@ interface InsightsSummary {
   breakdowns: Breakdown[];
 }
 
-const SEGMENT_OPTIONS: Array<{ value: InsightSegment; label: string }> = [
-  { value: "INDIVIDUAL", label: "Individuals" },
-  { value: "INSTITUTIONAL", label: "Institutions" },
-  { value: "ALL", label: "All accounts" },
-];
-
 const METRIC_OPTIONS: Array<{ value: InsightMetric; label: string }> = [
   { value: "aum", label: "Share of AUM" },
   { value: "accounts", label: "Share of accounts" },
@@ -31,41 +26,6 @@ const METRIC_OPTIONS: Array<{ value: InsightMetric; label: string }> = [
 
 // Demographic cards only describe people, so institutions skip them
 const DEMOGRAPHIC_DIMENSIONS = new Set(["gender", "ageBand"]);
-
-/** Segmented button group used for the segment and measure toggles. */
-const ToggleGroup = <T extends string>({
-  options,
-  value,
-  onChange,
-}: {
-  options: Array<{ value: T; label: string }>;
-  value: T;
-  onChange: (value: T) => void;
-}) => (
-  <div className="inline-flex rounded-lg border border-gray-200 bg-white p-0.5">
-    {options.map((option) => (
-      <button
-        key={option.value}
-        onClick={() => onChange(option.value)}
-        className={`px-3 py-1.5 text-sm rounded-md transition-colors ${
-          value === option.value
-            ? "bg-blue-50 text-blue-700 font-medium"
-            : "text-gray-600 hover:text-gray-900"
-        }`}
-      >
-        {option.label}
-      </button>
-    ))}
-  </div>
-);
-
-const StatTile = ({ label, value, hint }: { label: string; value: string; hint: string }) => (
-  <div className="bg-white p-5 rounded-lg shadow">
-    <p className="text-sm text-gray-600">{label}</p>
-    <p className="text-2xl font-bold text-gray-900 mt-1">{value}</p>
-    <p className="text-xs text-gray-500 mt-1">{hint}</p>
-  </div>
-);
 
 /**
  * AUM composition of funded accounts by client profile (gender, age, location,

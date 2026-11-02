@@ -30,6 +30,8 @@ export type InsightMetric = "aum" | "accounts";
 interface BreakdownBarListProps {
   breakdown: Breakdown;
   metric: InsightMetric;
+  /** What the row count counts (rows reuse the "accounts" field for goal counts too). */
+  countLabel?: "accounts" | "goals";
 }
 
 /**
@@ -38,7 +40,8 @@ interface BreakdownBarListProps {
  * differences stay visible; the printed share is the true share of the total.
  * Hovering a row shows its full figures.
  */
-export const BreakdownBarList = ({ breakdown, metric }: BreakdownBarListProps) => {
+export const BreakdownBarList = ({ breakdown, metric, countLabel = "accounts" }: BreakdownBarListProps) => {
+  const shortCountLabel = countLabel === "goals" ? "goals" : "accts";
   const shareOf = (row: BreakdownRow) =>
     metric === "aum" ? row.shareOfAum : row.shareOfAccounts;
   const maxShare = Math.max(...breakdown.rows.map(shareOf), 0.0001);
@@ -64,9 +67,9 @@ export const BreakdownBarList = ({ breakdown, metric }: BreakdownBarListProps) =
             const share = shareOf(row);
             const tooltip = [
               formatGroupLabel(row.key),
-              `${formatCount(row.accounts)} accounts (${formatPct(row.shareOfAccounts)})`,
+              `${formatCount(row.accounts)} ${countLabel} (${formatPct(row.shareOfAccounts)})`,
               `AUM ${formatUGX(row.aum)} (${formatPct(row.shareOfAum)})`,
-              `Median balance ${formatUGX(row.medianBalance)}`,
+              `Median ${countLabel === "goals" ? "goal value" : "balance"} ${formatUGX(row.medianBalance)}`,
             ].join("\n");
             return (
               <div key={row.key} title={tooltip} className="group cursor-default">
@@ -79,7 +82,7 @@ export const BreakdownBarList = ({ breakdown, metric }: BreakdownBarListProps) =
                     <span className="text-gray-500 ml-2 text-xs">
                       {metric === "aum"
                         ? formatUGXCompact(row.aum)
-                        : `${formatCount(row.accounts)} accts`}
+                        : `${formatCount(row.accounts)} ${shortCountLabel}`}
                     </span>
                   </span>
                 </div>

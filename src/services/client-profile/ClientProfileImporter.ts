@@ -35,7 +35,10 @@ interface GoalEnrichment {
   sponsorTitle: string | null;
   ultimaEnabled: boolean | null;
   mappedGoalType: GoalType | null;
+  targetFundSplit: Record<string, number> | null;
 }
+
+const FUND_CODES = ['XUMMF', 'XUBF', 'XUDEF', 'XUREF'] as const;
 
 export interface ClientProfileImportReport {
   dryRun: boolean;
@@ -224,7 +227,17 @@ function collectGoalEnrichment(row: UltimaRow, goalTypeByNumber: Map<string, Goa
     sponsorTitle: cleanOptionalText(row['goalSponsorTitle']),
     ultimaEnabled: enabledFlag === 'ENABLED' ? true : enabledFlag === 'DISABLED' ? false : null,
     mappedGoalType: ultimaGoalName ? GOAL_TYPE_BY_ULTIMA_NAME[ultimaGoalName.toUpperCase()] ?? null : null,
+    targetFundSplit: readTargetFundSplit(row),
   });
+}
+
+/** Ultima's per-fund allocation percentages; null unless they add up to 100 (some goals show all zeros). */
+function readTargetFundSplit(row: UltimaRow): Record<string, number> | null {
+  const split = Object.fromEntries(FUND_CODES.map((code) => [code, Number(row[code])]));
+  if (Object.values(split).some((v) => !Number.isFinite(v) || v < 0)) return null;
+  const total = Object.values(split).reduce((s, v) => s + v, 0);
+  if (Math.abs(total - 100) > 1) return null;
+  return Object.fromEntries(FUND_CODES.map((code) => [code, Math.round(split[code] * 100) / 100]));
 }
 
 /**
@@ -302,6 +315,7 @@ function summariseCollectedData(
   for (const g of goals.values()) {
     tally('goalRiskScore', g.riskScore);
     tally('ultimaGoalName', g.ultimaGoalName);
+    tally('goalTargetFundSplit', g.targetFundSplit ? 'present' : 'missing');
     if (g.mappedGoalType && goalTypeByNumber.get(g.goalNumber) === GoalType.OTHER) report.goals.goalTypeFilledFromOther++;
   }
 
@@ -348,7 +362,7 @@ async function writeGoalEnrichment(enrichments: GoalEnrichment[]): Promise<void>
   for (let i = 0; i < enrichments.length; i += WRITE_BATCH_SIZE) {
     const values = enrichments.slice(i, i + WRITE_BATCH_SIZE).map(
       (g) =>
-        Prisma.sql`(${g.goalNumber}::text, ${g.riskScore}::int, ${g.ultimaGoalName}::text, ${g.sponsorTitle}::text, ${g.ultimaEnabled}::boolean, ${g.mappedGoalType}::text)`
+        Prisma.sql`(${g.goalNumber}::text, ${g.riskScore}::int, ${g.ultimaGoalName}::text, ${g.sponsorTitle}::text, ${g.ultimaEnabled}::boolean, ${g.mappedGoalType}::text, ${g.targetFundSplit ? JSON.stringify(g.targetFundSplit) : null}::text)`
     );
     await prisma.$executeRaw`
       UPDATE goals AS g SET
@@ -358,8 +372,9 @@ async function writeGoalEnrichment(enrichments: GoalEnrichment[]): Promise<void>
         "ultimaEnabled" = v.enabled,
         "goalType" = CASE WHEN g."goalType" = 'OTHER' AND v.goal_type IS NOT NULL
                           THEN v.goal_type::"GoalType" ELSE g."goalType" END,
+        "targetFundSplit" = v.target_split::jsonb,
         "updatedAt" = NOW()
-      FROM (VALUES ${Prisma.join(values)}) AS v(goal_number, risk_score, goal_name, sponsor_title, enabled, goal_type)
+      FROM (VALUES ${Prisma.join(values)}) AS v(goal_number, risk_score, goal_name, sponsor_title, enabled, goal_type, target_split)
       WHERE g."goalNumber" = v.goal_number`;
     logger.info(`Goals enriched: ${Math.min(i + WRITE_BATCH_SIZE, enrichments.length)}/${enrichments.length}`);
   }
