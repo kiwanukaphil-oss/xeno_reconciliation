@@ -49,6 +49,7 @@ model Account {
 
   // Relations
   client               Client @relation(fields: [clientId], references: [id], onDelete: Cascade)
+  profile              AccountProfile?
   goals                Goal[]
   fundTransactions     FundTransaction[]
   bankGoalTransactions BankGoalTransaction[]
@@ -75,6 +76,12 @@ model Goal {
   // Example: { "XUMMF": 40, "XUBF": 30, "XUDEF": 20, "XUREF": 10 }
   fundDistribution Json
 
+  // Enrichment from the Ultima client data export
+  riskScore        Int?     // 0-10 onboarding questionnaire score; higher = more equity allocation
+  ultimaGoalName   String?  // Raw Ultima goal category, e.g. WEALTH, HOME, EMERGENCIES, Custom Goal
+  sponsorTitle     String?
+  ultimaEnabled    Boolean?
+
   status           GoalStatus @default(ACTIVE)
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
@@ -83,11 +90,95 @@ model Goal {
   account              Account @relation(fields: [accountId], references: [id], onDelete: Cascade)
   fundTransactions     FundTransaction[]
   bankGoalTransactions BankGoalTransaction[]
+  ultimaSnapshots      UltimaGoalSnapshot[]
 
   @@index([accountId])
   @@index([goalNumber])
   @@index([status])
+  @@index([riskScore])
   @@map("goals")
+}
+
+// Client demographics and onboarding details imported from the Ultima client export.
+// Kept per account (not per Client) because Client records are grouped by name and can
+// merge different people; reports join balances to profiles through the account.
+model AccountProfile {
+  id                   String         @id @default(uuid())
+  accountId            String         @unique
+
+  gender               Gender         @default(UNKNOWN)
+  dateOfBirth          DateTime?      @db.Date
+
+  // Raw district text is kept so the mapping can be improved and the import re-run
+  districtRaw          String?
+  districtId           String?
+  country              String?
+  locationStatus       LocationStatus @default(MISSING)
+
+  // Parsed from Ultima "Source", e.g. APP_ANDROID_MTN -> APP / ANDROID / MTN
+  signupSourceRaw      String?
+  signupChannel        String?        // MTN | WEB | APP | YOLLO
+  signupPlatform       String?        // ANDROID | IOS
+  signupPartner        String?        // MTN | AIRTEL
+  phoneNetwork         PhoneNetwork   @default(UNKNOWN)
+
+  userJoinedAt         DateTime?
+  portalEnabled        Boolean?
+  enrollmentStatus     String?        // Ultima "Activated": ENROLLED | NOT_ENROLLED
+  contactClosed        Boolean        @default(false) // Ultima prefixes closed users' phone with "closed_"
+  sponsorAccountNumber String?
+  institutionName      String?
+
+  sourceFile           String?
+  importedAt           DateTime       @default(now())
+  updatedAt            DateTime       @updatedAt
+
+  account              Account        @relation(fields: [accountId], references: [id], onDelete: Cascade)
+  district             District?      @relation(fields: [districtId], references: [id])
+
+  @@index([gender])
+  @@index([districtId])
+  @@index([locationStatus])
+  @@index([dateOfBirth])
+  @@index([signupChannel])
+  @@map("account_profiles")
+}
+
+// Ultima's own view of each goal on a given date (from the "Goal Stats" export).
+// Kept per as-of date so successive exports build a history, and so goal values can be
+// reconciled against values the system derives from its own transactions and prices.
+model UltimaGoalSnapshot {
+  id                String    @id @default(uuid())
+  goalId            String
+  asOfDate          DateTime  @db.Date
+
+  goalTarget        Decimal?  @db.Decimal(18, 2) // null when Ultima shows 0 (no target set)
+  currentValue      Decimal   @db.Decimal(18, 2)
+  netInvested       Decimal   @db.Decimal(18, 2) // Ultima definition not yet confirmed
+  lastDepositAmount Decimal?  @db.Decimal(18, 2)
+  lastDepositDate   DateTime? @db.Date
+  depositCount      Int
+  withdrawalCount   Int
+
+  sourceFile        String?
+  importedAt        DateTime  @default(now())
+
+  goal              Goal      @relation(fields: [goalId], references: [id], onDelete: Cascade)
+
+  @@unique([goalId, asOfDate])
+  @@index([asOfDate])
+  @@map("ultima_goal_snapshots")
+}
+
+model District {
+  id       String           @id @default(uuid())
+  name     String           @unique
+  region   UgandaRegion
+
+  profiles AccountProfile[]
+
+  @@index([region])
+  @@map("districts")
 }
 
 model Fund {
@@ -532,6 +623,35 @@ enum GoalStatus {
   COMPLETED
   SUSPENDED
   CANCELED
+}
+
+enum Gender {
+  MALE
+  FEMALE
+  UNDISCLOSED
+  UNKNOWN
+}
+
+enum UgandaRegion {
+  CENTRAL
+  EASTERN
+  NORTHERN
+  WESTERN
+}
+
+enum LocationStatus {
+  UGANDA_DISTRICT
+  ABROAD
+  UNMATCHED
+  MISSING
+}
+
+enum PhoneNetwork {
+  MTN
+  AIRTEL
+  OTHER_UG
+  FOREIGN
+  UNKNOWN
 }
 
 enum FundType {

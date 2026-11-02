@@ -45,6 +45,10 @@ temp/
 Reference Docs/
 NUL
 
-# Database backups
+# Database backups (root-level only, so prisma/migrations/**/migration.sql stays tracked)
 *.dump
 *.sql.backup
+/*.sql
+
+# Client personal data exports (Ultima)
+Client data/
