@@ -5,6 +5,7 @@ import {
   ClientInsightsService,
   DEPOSIT_FREQUENCY_SQL,
   MIN_REPORTABLE_GROUP_SIZE,
+  WeightedGenderSplit,
 } from './ClientInsightsService';
 
 export type PackQuestion = 'Q1' | 'Q2' | 'Q3';
@@ -54,7 +55,7 @@ const STAT_COLUMNS: PackColumn[] = [
 // Standard cuts requested by investors: overall, gender, sign-up channel, location
 const STANDARD_GROUPINGS: Array<{ label: string; expression: string }> = [
   { label: 'All individual accounts', expression: `'All'` },
-  { label: 'Gender', expression: 'gender' },
+  { label: 'Gender (declared or 90%+ estimate)', expression: 'gender_with_estimate' },
   { label: 'Sign-up channel', expression: 'signup_channel' },
   { label: 'Location', expression: 'location_group' },
 ];
@@ -72,10 +73,18 @@ export class ImpactPackService {
              (SELECT MAX("asOfDate")::text FROM ultima_goal_snapshots) AS ultima
       FROM account_profile_aum`;
     const summary = await ClientInsightsService.getSummary('INDIVIDUAL');
-    const coverage = `Gender known for ${pct(summary.kpis.genderKnownShareOfAccounts)} of individual funded accounts (${pct(summary.kpis.genderKnownShareOfAum)} of their AUM).`;
+    const run = summary.genderEstimate;
+    const accuracyNote = run
+      ? ` Estimates were ${pct(run.holdoutAccuracy)} accurate on ${fmt(Math.round(run.labelledAccounts * 0.2))} declared accounts held back for testing` +
+        (run.mtnHoldoutAccuracy !== null ? ` (${pct(run.mtnHoldoutAccuracy)} for MTN sign-ups).` : '.')
+      : '';
+    const coverage =
+      `Gender declared for ${pct(summary.kpis.genderDeclaredShareOfAccounts)} of individual funded accounts and estimated from the client's name for a further ` +
+      `${pct(summary.kpis.genderEstimatedShareOfAccounts)}; ${pct(1 - summary.kpis.genderKnownShareOfAccounts)} remain unknown.` + accuracyNote;
 
     const tables: PackTable[] = [
       await this.buildAccountBaseTable(),
+      this.buildWeightedGenderTable(summary.weightedGender, coverage),
       ...(await this.buildProfileTables(coverage)),
       ...(await this.buildUsageTables(coverage)),
       ...(await this.buildOutcomeTables(asOf.ultima)),
@@ -95,7 +104,10 @@ export class ImpactPackService {
         'Figures count accounts, not people: one person can hold several accounts (e.g. personal and joint).',
         'Funded account = balance of UGX 5,000 or more. Individual = personal and joint accounts; institutional = pooled, linked and sponsor accounts.',
         'Customer-level statistics use individual funded accounts. Institutional accounts are counted separately.',
-        coverage + ' Demographics are mostly missing for clients who signed up through MTN, so splits by gender and age describe App/Web clients more than USSD clients. "UNKNOWN" is always shown.',
+        coverage + ' Ultima does not capture gender or age for most clients who signed up through MTN. Age splits describe App/Web clients more than USSD clients; "UNKNOWN" is always shown.',
+        'Gender estimates: where no gender is declared, it is estimated from the client\'s name using a model learned from the clients who did declare one (e.g. names shared mostly by women). ' +
+          'Headline gender shares are probability-weighted: each account counts towards Female and Male in proportion to its estimated probability, which reproduces totals far better than scaling up the known split. ' +
+          'Tables that split accounts by gender label an account only where the estimate is at least 90% confident. Estimates are used for aggregate reporting only, never for individual clients. Accounts marked "rather not say" are never estimated.',
         'Sign-up channel "MTN" means the client registered through the MTN mobile channel (USSD / mobile money); WEB and APP are the web platform and mobile apps.',
         'A deposit or withdrawal is one goal transaction, classified by its net amount across funds; fund switches that net to zero are ignored.',
         `Groups with fewer than ${MIN_REPORTABLE_GROUP_SIZE} accounts are combined or left out so no individual can be identified.`,
@@ -146,11 +158,44 @@ export class ImpactPackService {
     };
   }
 
+  /**
+   * Q1 headline: probability-weighted gender split of individual funded accounts and
+   * their AUM, with accounts that cannot be estimated shown separately (not allocated).
+   */
+  private static buildWeightedGenderTable(split: WeightedGenderSplit, coverage: string): PackTable {
+    const estimableAccounts = split.femaleAccounts + split.maleAccounts;
+    const estimableAum = split.femaleAum + split.maleAum;
+    const { basis } = split;
+    return {
+      id: 'gender-weighted',
+      question: 'Q1',
+      title: 'Gender (headline estimate, probability-weighted)',
+      note:
+        `${coverage} Based on ${fmt(basis.declaredAccounts)} declared accounts, ${fmt(basis.estimatedLabelAccounts)} confident estimates and ` +
+        `${fmt(basis.probabilityOnlyAccounts)} less certain estimates (weighted by probability). Shares are of accounts with a declared or estimated gender. ` +
+        'Estimated account counts are not whole numbers because each account is split by its probability.',
+      columns: [
+        { key: 'group', header: 'Gender', format: 'text' },
+        { key: 'accounts', header: 'Estimated accounts', format: 'int' },
+        { key: 'shareOfAccounts', header: 'Share of accounts', format: 'pct' },
+        { key: 'aum', header: 'Estimated AUM (UGX)', format: 'ugx' },
+        { key: 'shareOfAum', header: 'Share of AUM', format: 'pct' },
+      ],
+      rows: [
+        { group: 'Female', accounts: split.femaleAccounts, shareOfAccounts: ratio(split.femaleAccounts, estimableAccounts), aum: split.femaleAum, shareOfAum: ratio(split.femaleAum, estimableAum) },
+        { group: 'Male', accounts: split.maleAccounts, shareOfAccounts: ratio(split.maleAccounts, estimableAccounts), aum: split.maleAum, shareOfAum: ratio(split.maleAum, estimableAum) },
+        { group: 'Not estimable (rather not say, or no usable name)', accounts: split.notEstimableAccounts, shareOfAccounts: null, aum: split.notEstimableAum, shareOfAum: null },
+      ],
+    };
+  }
+
   /** Q1: location, gender, age, and the proxies available in place of income data. */
   private static async buildProfileTables(coverage: string): Promise<PackTable[]> {
     const fetch = (dimension: string) => ClientInsightsService.getBreakdownByName(dimension, 'INDIVIDUAL');
-    const [location, region, district, gender, age, channel, balanceBands] = await Promise.all([
-      fetch('locationGroup'), fetch('region'), fetch('district'), fetch('gender'), fetch('ageBand'), fetch('signupChannel'), fetch('balanceBand'),
+    const [location, region, district, gender, genderDeclared, age, channel, balanceBands] = await Promise.all([
+      fetch('locationGroup'), fetch('region'), fetch('district'), fetch('gender'),
+      ClientInsightsService.getBreakdownByName('gender', 'INDIVIDUAL', 'DECLARED'),
+      fetch('ageBand'), fetch('signupChannel'), fetch('balanceBand'),
     ]);
     const knownNote = (b: Breakdown) => `Known for ${pct(b.knownShareOfAccounts)} of accounts (${pct(b.knownShareOfAum)} of AUM).`;
 
@@ -158,7 +203,8 @@ export class ImpactPackService {
       breakdownToTable('location', 'Q1', 'Location: Kampala & Wakiso vs rest of Uganda vs abroad', location, knownNote(location) + ' Location is the district the client typed at sign-up.'),
       breakdownToTable('region', 'Q1', 'Location by region', region, knownNote(region)),
       breakdownToTable('district', 'Q1', 'Location by district (top 15)', district, knownNote(district)),
-      breakdownToTable('gender', 'Q1', 'Gender', gender, coverage),
+      breakdownToTable('gender', 'Q1', 'Gender by account: declared, or estimated with 90%+ confidence', gender, coverage),
+      breakdownToTable('gender-declared', 'Q1', 'Gender by account: declared in Ultima only (for comparison)', genderDeclared, knownNote(genderDeclared)),
       breakdownToTable('age', 'Q1', 'Age band', age, knownNote(age)),
       breakdownToTable('reach-channel', 'Q1', 'Reach proxy: sign-up channel (MTN = USSD / mobile money, no smartphone needed)', channel, knownNote(channel)),
       breakdownToTable('reach-balance', 'Q1', 'Reach proxy: balance bands', balanceBands, 'Small balances indicate small-scale savers; this is a proxy, not income.'),
@@ -296,18 +342,22 @@ export class ImpactPackService {
     return { id, question: 'Q2', title, note, columns, rows };
   }
 
-  /** Share of accounts by number of months with a deposit, overall and by gender and channel. */
+  /**
+   * Share of accounts by number of months with a deposit, overall and by gender and
+   * channel. Gender columns are probability-weighted (each account adds its female
+   * probability to Female and the rest to Male), like the headline gender table.
+   */
   private static async frequencyCrosstab(): Promise<PackTable> {
     const columns = [
-      { key: 'all', header: 'All', condition: 'TRUE' },
-      { key: 'female', header: 'Female', condition: `gender = 'FEMALE'` },
-      { key: 'male', header: 'Male', condition: `gender = 'MALE'` },
-      { key: 'genderUnknown', header: 'Gender unknown', condition: `gender NOT IN ('FEMALE', 'MALE')` },
-      { key: 'mtn', header: 'MTN sign-up', condition: `signup_channel = 'MTN'` },
-      { key: 'app', header: 'App sign-up', condition: `signup_channel = 'APP'` },
-      { key: 'web', header: 'Web sign-up', condition: `signup_channel = 'WEB'` },
+      { key: 'all', header: 'All', weight: '1' },
+      { key: 'female', header: 'Female (estimated)', weight: 'COALESCE(female_probability, 0)' },
+      { key: 'male', header: 'Male (estimated)', weight: 'COALESCE(1 - female_probability, 0)' },
+      { key: 'genderUnknown', header: 'Gender not estimable', weight: 'CASE WHEN female_probability IS NULL THEN 1 ELSE 0 END' },
+      { key: 'mtn', header: 'MTN sign-up', weight: `CASE WHEN signup_channel = 'MTN' THEN 1 ELSE 0 END` },
+      { key: 'app', header: 'App sign-up', weight: `CASE WHEN signup_channel = 'APP' THEN 1 ELSE 0 END` },
+      { key: 'web', header: 'Web sign-up', weight: `CASE WHEN signup_channel = 'WEB' THEN 1 ELSE 0 END` },
     ];
-    const counts = columns.map((c) => Prisma.raw(`COUNT(*) FILTER (WHERE ${c.condition})::int AS "${c.key}"`));
+    const counts = columns.map((c) => Prisma.raw(`SUM(${c.weight})::float8 AS "${c.key}"`));
     const result = await prisma.$queryRaw<any[]>`
       SELECT ${Prisma.raw(DEPOSIT_FREQUENCY_SQL)} AS band, ${Prisma.join(counts)}
       FROM account_profile_aum WHERE ${INDIVIDUAL_FUNDED} GROUP BY 1 ORDER BY 1`;
@@ -316,7 +366,7 @@ export class ImpactPackService {
       id: 'saving-frequency',
       question: 'Q2',
       title: 'Saving frequency: months with at least one deposit in the last 12 months',
-      note: 'Share of individual funded accounts in each column.',
+      note: 'Share of individual funded accounts in each column. Gender columns are probability-weighted estimates (see Read me).',
       columns: [{ key: 'band', header: 'Months with a deposit', format: 'text' }, ...columns.map((c) => ({ key: c.key, header: c.header, format: 'pct' as const }))],
       rows: result.map((r) => ({
         band: r.band,

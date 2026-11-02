@@ -113,6 +113,13 @@ model AccountProfile {
   gender               Gender         @default(UNKNOWN)
   dateOfBirth          DateTime?      @db.Date
 
+  // Estimated from the client's name where Ultima has no gender (never overwrites the declared value).
+  // estimatedGender is set only when the estimate is confident; the probability is kept for weighted totals.
+  estimatedGender            Gender?
+  estimatedFemaleProbability Float?
+  genderEstimateModel        String?
+  genderEstimatedAt          DateTime?
+
   // Raw district text is kept so the mapping can be improved and the import re-run
   districtRaw          String?
   districtId           String?
@@ -146,6 +153,27 @@ model AccountProfile {
   @@index([dateOfBirth])
   @@index([signupChannel])
   @@map("account_profiles")
+}
+
+/// One run of the name-based gender estimator, with the hold-out validation used to disclose its accuracy
+model GenderEstimateRun {
+  id                     String   @id @default(uuid())
+  modelVersion           String
+  runAt                  DateTime @default(now())
+  confidenceThreshold    Float
+  labelledAccounts       Int      // personal accounts with a declared male/female gender (training data)
+  scoredAccounts         Int      // accounts without a declared gender that received a probability
+  labelledEstimates      Int      // of those, confident enough for an estimated gender label
+  unscorableAccounts     Int      // no name part seen often enough to estimate
+  holdoutAccuracy        Float    // correct share of confident hold-out estimates
+  holdoutCoverage        Float    // share of hold-out accounts that got a confident estimate
+  mtnHoldoutAccuracy     Float?   // same, for MTN sign-ups only (the group most estimates are for)
+  predictedFemaleShare   Float    // hold-out: probability-weighted female share...
+  actualFemaleShare      Float    // ...vs the declared share
+  metrics                Json     // accuracy and coverage at each threshold tried
+
+  @@index([runAt])
+  @@map("gender_estimate_runs")
 }
 
 // Ultima's own view of each goal on a given date (from the "Goal Stats" export).

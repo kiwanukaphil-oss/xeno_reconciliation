@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Info, Loader2 } from "lucide-react";
-import { fetchClientInsightsSummary, type InsightSegment } from "../../services/api";
+import { fetchClientInsightsSummary, type GenderBasis, type InsightSegment } from "../../services/api";
 import { BreakdownBarList, type Breakdown, type InsightMetric } from "./BreakdownBarList";
 import { formatCount, formatDate, formatPct, formatUGXCompact, SEGMENT_OPTIONS } from "./insightFormat";
 import { StatTile, ToggleGroup } from "./InsightControls";
@@ -15,13 +15,25 @@ interface InsightsSummary {
     depositorsLast12Months: number;
     genderKnownShareOfAccounts: number;
     genderKnownShareOfAum: number;
+    genderDeclaredShareOfAccounts: number;
+    genderEstimatedShareOfAccounts: number;
   };
+  weightedGender: {
+    femaleShareOfAccounts: number | null;
+    femaleShareOfAum: number | null;
+  };
+  genderEstimate: { holdoutAccuracy: number; mtnHoldoutAccuracy: number | null } | null;
   breakdowns: Breakdown[];
 }
 
 const METRIC_OPTIONS: Array<{ value: InsightMetric; label: string }> = [
   { value: "aum", label: "Share of AUM" },
   { value: "accounts", label: "Share of accounts" },
+];
+
+const GENDER_BASIS_OPTIONS: Array<{ value: GenderBasis; label: string }> = [
+  { value: "ESTIMATED", label: "Gender: declared + estimated" },
+  { value: "DECLARED", label: "Declared only" },
 ];
 
 // Demographic cards only describe people, so institutions skip them
@@ -35,19 +47,20 @@ const DEMOGRAPHIC_DIMENSIONS = new Set(["gender", "ageBand"]);
 const ClientInsights = () => {
   const [segment, setSegment] = useState<InsightSegment>("INDIVIDUAL");
   const [metric, setMetric] = useState<InsightMetric>("aum");
+  const [genderBasis, setGenderBasis] = useState<GenderBasis>("ESTIMATED");
   const [summary, setSummary] = useState<InsightsSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    loadSummary(segment);
-  }, [segment]);
+    loadSummary(segment, genderBasis);
+  }, [segment, genderBasis]);
 
-  const loadSummary = async (selected: InsightSegment) => {
+  const loadSummary = async (selected: InsightSegment, basis: GenderBasis) => {
     try {
       setLoading(true);
       setError(null);
-      setSummary(await fetchClientInsightsSummary(selected));
+      setSummary(await fetchClientInsightsSummary(selected, basis));
     } catch (err: any) {
       console.error("Failed to load client insights:", err);
       setError(err.message || "Failed to load client insights");
@@ -68,6 +81,9 @@ const ClientInsights = () => {
         <div className="flex flex-wrap items-center gap-3">
           <ToggleGroup options={SEGMENT_OPTIONS} value={segment} onChange={setSegment} />
           <ToggleGroup options={METRIC_OPTIONS} value={metric} onChange={setMetric} />
+          {segment !== "INSTITUTIONAL" && (
+            <ToggleGroup options={GENDER_BASIS_OPTIONS} value={genderBasis} onChange={setGenderBasis} />
+          )}
         </div>
         {summary && (
           <p className="text-sm text-gray-600">
@@ -87,7 +103,7 @@ const ClientInsights = () => {
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
           <p className="text-red-800">{error}</p>
           <button
-            onClick={() => loadSummary(segment)}
+            onClick={() => loadSummary(segment, genderBasis)}
             className="mt-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700"
           >
             Retry
@@ -106,20 +122,32 @@ const ClientInsights = () => {
               value={formatCount(summary.kpis.depositorsLast12Months)}
               hint={`${formatPct(summary.kpis.depositorsLast12Months / Math.max(summary.kpis.fundedAccounts, 1))} of funded accounts`}
             />
-            <StatTile
-              label="Gender known"
-              value={formatPct(summary.kpis.genderKnownShareOfAum, 0) + " of AUM"}
-              hint={`${formatPct(summary.kpis.genderKnownShareOfAccounts, 0)} of accounts`}
-            />
+            {segment === "INSTITUTIONAL" ? (
+              <StatTile
+                label="Gender known"
+                value={formatPct(summary.kpis.genderKnownShareOfAum, 0) + " of AUM"}
+                hint={`${formatPct(summary.kpis.genderKnownShareOfAccounts, 0)} of accounts`}
+              />
+            ) : (
+              <StatTile
+                label="Women (estimated)"
+                value={formatPct(summary.weightedGender.femaleShareOfAccounts, 0) + " of accounts"}
+                hint={`${formatPct(summary.weightedGender.femaleShareOfAum, 0)} of AUM · probability-weighted`}
+              />
+            )}
           </div>
 
           {segment !== "INSTITUTIONAL" && (
             <div className="flex items-start gap-2 bg-blue-50 border border-blue-100 rounded-lg p-3 mb-6 text-sm text-blue-900">
               <Info className="w-4 h-4 mt-0.5 flex-shrink-0" />
               <p>
-                Demographics come from Ultima sign-up data and are mostly missing for clients who signed up via MTN.
-                They cover most of the AUM but a minority of accounts, so compare groups on share of AUM, and read
-                share of accounts with the Unknown bar in view. Counts are accounts, not people.
+                Gender is declared in Ultima for {formatPct(summary.kpis.genderDeclaredShareOfAccounts, 0)} of accounts
+                and estimated from the client's name for a further {formatPct(summary.kpis.genderEstimatedShareOfAccounts, 0)}
+                {summary.genderEstimate &&
+                  ` (${formatPct(summary.genderEstimate.holdoutAccuracy, 0)} accurate when tested on declared accounts)`}
+                . The Gender chart labels an estimate only when it is at least 90% confident; the "Women" tile weights every
+                estimate by its probability. Age and location come from Ultima only and are mostly missing for MTN
+                sign-ups, so read share of accounts with the Unknown bar in view. Counts are accounts, not people.
               </p>
             </div>
           )}

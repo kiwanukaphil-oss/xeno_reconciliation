@@ -1,6 +1,6 @@
 import { NextFunction, Request, Response, Router } from 'express';
 import { BadRequestError } from '../errors';
-import { ClientInsightsService, InsightSegment } from '../services/client-insights/ClientInsightsService';
+import { ClientInsightsService, GenderBasis, InsightSegment } from '../services/client-insights/ClientInsightsService';
 import { ImpactPackService } from '../services/client-insights/ImpactPackService';
 import { GoalRiskService } from '../services/client-insights/GoalRiskService';
 import { GroupSchemeService } from '../services/client-insights/GroupSchemeService';
@@ -19,13 +19,19 @@ function readLimit(req: Request, fallback: number): number {
   return Math.min(Math.max(parseInt(String(req.query.limit ?? fallback), 10) || fallback, 1), 500);
 }
 
+function readGenderBasis(req: Request): GenderBasis {
+  const basis = String(req.query.genderBasis ?? 'ESTIMATED').toUpperCase();
+  if (basis !== 'ESTIMATED' && basis !== 'DECLARED') throw new BadRequestError('genderBasis must be ESTIMATED or DECLARED');
+  return basis;
+}
+
 /**
- * GET /api/client-insights/summary?segment=INDIVIDUAL|INSTITUTIONAL|ALL
+ * GET /api/client-insights/summary?segment=INDIVIDUAL|INSTITUTIONAL|ALL&genderBasis=ESTIMATED|DECLARED
  * Headline figures and AUM composition breakdowns for funded accounts
  */
 router.get('/summary', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await ClientInsightsService.getSummary(readSegment(req)));
+    res.json(await ClientInsightsService.getSummary(readSegment(req), readGenderBasis(req)));
   } catch (error) {
     next(error);
   }

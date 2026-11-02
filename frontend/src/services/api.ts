@@ -216,8 +216,10 @@ export const fetchDashboardMetrics = async () => {
 // Client Insights APIs (profile-based AUM composition, data quality, impact pack)
 export type InsightSegment = "INDIVIDUAL" | "INSTITUTIONAL" | "ALL";
 
-export const fetchClientInsightsSummary = async (segment: InsightSegment) => {
-  const response = await fetch(`${API_URL}/api/client-insights/summary?segment=${segment}`);
+export type GenderBasis = "ESTIMATED" | "DECLARED";
+
+export const fetchClientInsightsSummary = async (segment: InsightSegment, genderBasis: GenderBasis = "ESTIMATED") => {
+  const response = await fetch(`${API_URL}/api/client-insights/summary?segment=${segment}&genderBasis=${genderBasis}`);
   return handleResponse(response);
 };
 

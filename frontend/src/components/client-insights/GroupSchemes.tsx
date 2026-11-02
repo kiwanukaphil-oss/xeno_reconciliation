@@ -114,7 +114,8 @@ const GroupSchemes = () => {
             <h2 className="text-lg font-semibold text-gray-900">Groups</h2>
             <p className="text-sm text-gray-500">
               Named from the sponsor's client record where the sponsor account is in the system; otherwise shown by
-              sponsor account number. Gender mix and median balance are hidden for groups under 5 members.
+              sponsor account number. Female share counts declared gender plus name-based estimates (probability-weighted).
+              Gender mix and median balance are hidden for groups under 5 members.
             </p>
           </div>
           <div className="relative">
@@ -138,7 +139,7 @@ const GroupSchemes = () => {
                 <th className="text-right py-2 font-medium">Member AUM</th>
                 <th className="text-right py-2 font-medium">Median member balance</th>
                 <th className="text-right py-2 font-medium">Deposited in 12m</th>
-                <th className="text-right py-2 font-medium">Female (of known)</th>
+                <th className="text-right py-2 font-medium">Female (est.)</th>
               </tr>
             </thead>
             <tbody>

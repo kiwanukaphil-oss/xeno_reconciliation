@@ -30,8 +30,9 @@ export class GroupSchemeService {
              COALESCE(SUM(m.aum), 0)::float8 AS member_aum,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY m.aum) FILTER (WHERE m.is_funded)::float8 AS median_member_balance,
              COUNT(*) FILTER (WHERE m.deposits_12m > 0)::int AS depositors_12m,
-             COUNT(*) FILTER (WHERE m.gender = 'FEMALE')::int AS female,
-             COUNT(*) FILTER (WHERE m.gender = 'MALE')::int AS male
+             -- Probability-weighted: declared gender counts as 1/0, name-based estimates as their probability
+             COALESCE(SUM(m.female_probability), 0)::float8 AS female_weight,
+             COUNT(m.female_probability)::int AS gender_estimable
       FROM members m
       LEFT JOIN accounts s ON s."accountNumber" = m.sponsor_account_number
       LEFT JOIN clients sc ON sc.id = s."clientId"
@@ -40,7 +41,6 @@ export class GroupSchemeService {
       ORDER BY member_aum DESC`;
 
     const rows = groups.map((g) => {
-      const genderKnown = g.female + g.male;
       return {
         sponsorAccountNumber: g.sponsor_account_number,
         groupName: g.group_name,
@@ -52,8 +52,8 @@ export class GroupSchemeService {
         memberAum: g.member_aum,
         medianMemberBalance: g.funded_members >= MIN_REPORTABLE_GROUP_SIZE ? g.median_member_balance : null,
         depositorsLast12Months: g.depositors_12m,
-        // Gender mix is only shown where enough members have a known gender
-        femaleShareOfKnown: genderKnown >= MIN_REPORTABLE_GROUP_SIZE ? g.female / genderKnown : null,
+        // Gender mix (declared or estimated) is only shown where enough members have one
+        femaleShareOfKnown: g.gender_estimable >= MIN_REPORTABLE_GROUP_SIZE ? g.female_weight / g.gender_estimable : null,
       };
     });
 
