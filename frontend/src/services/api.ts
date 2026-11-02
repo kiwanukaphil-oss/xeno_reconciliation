@@ -4,7 +4,8 @@ const API_URL = import.meta.env.VITE_API_URL || "http://localhost:3000";
 const handleResponse = async (response: Response) => {
   const data = await response.json();
   if (!response.ok) {
-    throw new Error(data.error || "An unknown error occurred");
+    // Standard API errors carry a readable "message"; "error" is only the error type
+    throw new Error(data.message || data.error || "An unknown error occurred");
   }
   return data;
 };
@@ -246,6 +247,60 @@ export const fetchGroupSchemes = async () => {
 export const fetchImpactPack = async () => {
   const response = await fetch(`${API_URL}/api/client-insights/impact-pack`);
   return handleResponse(response);
+};
+
+export const fetchGoalAchievement = async (segment: InsightSegment) => {
+  const response = await fetch(`${API_URL}/api/client-insights/goal-achievement?segment=${segment}`);
+  return handleResponse(response);
+};
+
+export interface AccountDirectoryQuery {
+  search?: string;
+  segment?: InsightSegment;
+  funded?: "FUNDED" | "UNFUNDED" | "ALL";
+  channel?: string;
+  gender?: string;
+  genderEstimate?: string;
+  missing?: string;
+  minBalance?: number;
+  sort?: "balance" | "name" | "lastDeposit" | "accountNumber";
+  direction?: "asc" | "desc";
+  page?: number;
+  pageSize?: number;
+}
+
+/** Query string for the account directory, leaving out empty filters. */
+const buildAccountDirectoryParams = (query: AccountDirectoryQuery) => {
+  const params = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== null && value !== "") params.set(key, String(value));
+  });
+  return params.toString();
+};
+
+export const fetchAccountProfiles = async (query: AccountDirectoryQuery, signal?: AbortSignal) => {
+  const response = await fetch(`${API_URL}/api/client-insights/accounts?${buildAccountDirectoryParams(query)}`, { signal });
+  return handleResponse(response);
+};
+
+export const fetchAccountProfileDetail = async (accountNumber: string, signal?: AbortSignal) => {
+  const response = await fetch(`${API_URL}/api/client-insights/accounts/${encodeURIComponent(accountNumber)}`, { signal });
+  return handleResponse(response);
+};
+
+/** Export link: the browser downloads the streamed workbook straight to disk, without holding it in memory. */
+export const accountProfilesExportUrl = (query: AccountDirectoryQuery) => {
+  const filters: AccountDirectoryQuery = {
+    search: query.search,
+    segment: query.segment,
+    funded: query.funded,
+    channel: query.channel,
+    gender: query.gender,
+    genderEstimate: query.genderEstimate,
+    missing: query.missing,
+    minBalance: query.minBalance,
+  };
+  return `${API_URL}/api/client-insights/accounts/export?${buildAccountDirectoryParams(filters)}`;
 };
 
 export const downloadImpactPack = async () => {

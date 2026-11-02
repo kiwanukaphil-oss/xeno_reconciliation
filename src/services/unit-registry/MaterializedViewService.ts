@@ -68,6 +68,16 @@ export class MaterializedViewService {
         failed.push('goal_holdings');
       }
 
+      // Refresh goal_achievement (per-goal status against the Ultima target)
+      try {
+        await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY goal_achievement`;
+        refreshed.push('goal_achievement');
+        logger.info('✅ goal_achievement refreshed');
+      } catch (error: any) {
+        logger.error('❌ Failed to refresh goal_achievement:', error);
+        failed.push('goal_achievement');
+      }
+
       const duration = Date.now() - startTime;
       logger.info(`All materialized views refreshed in ${duration}ms (${refreshed.length} succeeded, ${failed.length} failed)`);
 
@@ -142,13 +152,15 @@ export class MaterializedViewService {
 
   /**
    * Refresh the Client Insights views: account_profile_aum (balances + saving activity +
-   * Ultima profile per account) and goal_holdings (per-goal fund values and drift).
+   * Ultima profile per account), goal_holdings (per-goal fund values and drift) and
+   * goal_achievement (per-goal status against the Ultima target).
    * Call after account_unit_balances, and after a client profile import.
    */
   static async refreshClientInsightViews(): Promise<void> {
     await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY account_profile_aum`;
     await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY goal_holdings`;
-    logger.info('account_profile_aum and goal_holdings refreshed');
+    await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY goal_achievement`;
+    logger.info('account_profile_aum, goal_holdings and goal_achievement refreshed');
   }
 
   /**

@@ -7,6 +7,7 @@ import {
   MIN_REPORTABLE_GROUP_SIZE,
   WeightedGenderSplit,
 } from './ClientInsightsService';
+import { AchievementBreakdown, GoalAchievementService } from './GoalAchievementService';
 
 export type PackQuestion = 'Q1' | 'Q2' | 'Q3';
 export type PackColumnFormat = 'text' | 'int' | 'ugx' | 'pct';
@@ -107,7 +108,7 @@ export class ImpactPackService {
         coverage + ' Ultima does not capture gender or age for most clients who signed up through MTN. Age splits describe App/Web clients more than USSD clients; "UNKNOWN" is always shown.',
         'Gender estimates: where no gender is declared, it is estimated from the client\'s name using a model learned from the clients who did declare one (e.g. names shared mostly by women). ' +
           'Headline gender shares are probability-weighted: each account counts towards Female and Male in proportion to its estimated probability, which reproduces totals far better than scaling up the known split. ' +
-          'Tables that split accounts by gender label an account only where the estimate is at least 90% confident. Estimates are used for aggregate reporting only, never for individual clients. Accounts marked "rather not say" are never estimated.',
+          'Tables that split accounts by gender label an account only where the estimate is at least 90% confident. Estimates are shown to staff in the account directory, always marked as estimates, and are not used for decisions about or communications with individual clients. Accounts marked "rather not say" are never estimated.',
         'Sign-up channel "MTN" means the client registered through the MTN mobile channel (USSD / mobile money); WEB and APP are the web platform and mobile apps.',
         'A deposit or withdrawal is one goal transaction, classified by its net amount across funds; fund switches that net to zero are ignored.',
         `Groups with fewer than ${MIN_REPORTABLE_GROUP_SIZE} accounts are combined or left out so no individual can be identified.`,
@@ -255,8 +256,10 @@ export class ImpactPackService {
     ];
   }
 
-  /** Q3: persistence, dormancy, rebuilding after withdrawals, emergency buffers and goal progress. */
+  /** Q3: persistence, dormancy, rebuilding after withdrawals, emergency buffers and goal achievement. */
   private static async buildOutcomeTables(ultimaAsOf: string | null): Promise<PackTable[]> {
+    const achievement = await GoalAchievementService.getReport('INDIVIDUAL');
+    const h = achievement.headline;
     const [k] = await prisma.$queryRaw<any[]>`
       SELECT
         COUNT(*) FILTER (WHERE deposit_count > 0)::int AS ever_saved,
@@ -289,6 +292,9 @@ export class ImpactPackService {
       indicator('Rebuilt after a withdrawal: deposited again after their last withdrawal', ratio(k.rebuilt, k.withdrew), 'pct', `of ${fmt(k.withdrew)} accounts that have withdrawn`),
       indicator('Hold an emergency goal', ratio(k.emergency_holders, k.funded), 'pct', `of ${fmt(k.funded)} funded accounts`),
       indicator('Median value of a funded emergency goal (UGX)', emergency.median_value, 'ugx', `${fmt(emergency.funded_goals)} emergency goals worth UGX 5,000+`),
+      indicator('Goals with a savings target set', h.targetSettingRate, 'pct', `of ${fmt(h.goals)} individual goals`),
+      indicator('Reached their savings target (still holding it, or reached it and used the money)', h.everReachedRate, 'pct', `of ${fmt(h.goalsWithPlausibleTarget)} goals with a target`),
+      indicator('Reached their target and used the savings (e.g. fees paid)', h.reachedUsedRate, 'pct', `of ${fmt(h.goalsWithPlausibleTarget)} goals with a target`),
     ];
 
     return [
@@ -305,7 +311,113 @@ export class ImpactPackService {
         rows: indicators.map((i) => ({ label: i.label, value: formatValue(i.value, i.format), base: i.base })),
       },
       await this.persistenceByCohortTable(),
+      ...this.buildGoalAchievementTables(achievement),
       ...(await this.goalAchievementTables(ultimaAsOf)),
+    ];
+  }
+
+  /**
+   * Q3 goal achievement: status of every individual goal, achievement rates by
+   * target size, category, gender, channel and location, saving pace of goals on
+   * the way, and how goals with and without a target compare.
+   */
+  private static buildGoalAchievementTables(report: Awaited<ReturnType<typeof GoalAchievementService.getReport>>): PackTable[] {
+    const { asOf, headline } = report;
+    const method =
+      `Targets and current values from Ultima goal statistics as of ${asOf.ultimaSnapshot}; whether a target was ever reached is worked out from ` +
+      `deposits and withdrawals in this system (to ${asOf.transactions}), using cash deposited without investment growth, so it is a conservative count.`;
+    const statusLabels: Record<string, string> = {
+      REACHED_HOLDING: 'Reached target and still holding it',
+      REACHED_USED: 'Reached target, then used the savings',
+      IN_PROGRESS: 'On the way to target',
+      NOT_STARTED: 'Target set, no savings yet',
+      NO_TARGET: 'No target set',
+      TARGET_OUT_OF_RANGE: 'Target below UGX 10k or above UGX 10bn (excluded from rates)',
+      NO_ULTIMA_DATA: 'Not in the Ultima goal statistics',
+    };
+    const rateColumns: PackColumn[] = [
+      { key: 'goals', header: 'Goals with a target', format: 'int' },
+      { key: 'everReachedRate', header: 'Reached target (holding or used)', format: 'pct' },
+      { key: 'reachedUsedRate', header: 'Reached and used', format: 'pct' },
+      { key: 'medianTarget', header: 'Median target (UGX)', format: 'ugx' },
+    ];
+    const achievementTable = (id: string, title: string, breakdown: AchievementBreakdown | undefined, note: string): PackTable => ({
+      id,
+      question: 'Q3',
+      title,
+      note,
+      columns: [{ key: 'group', header: breakdown?.label ?? 'Group', format: 'text' }, ...rateColumns],
+      rows: (breakdown?.rows ?? []).map((r) => ({
+        group: r.key,
+        goals: r.goals,
+        everReachedRate: r.everReachedRate,
+        reachedUsedRate: r.reachedUsedRate,
+        medianTarget: r.medianTarget,
+      })),
+    });
+    const byDimension = (dimension: string) => report.breakdowns.find((b) => b.dimension === dimension);
+    const sizeNote = 'Smaller targets are reached far more often, so compare groups with their typical target size in view.';
+
+    return [
+      {
+        id: 'goal-status',
+        question: 'Q3',
+        title: 'Savings goals: where every individual goal stands',
+        note:
+          `${method} ${pct(headline.everReachedRate)} of goals with a target have reached it: ${pct(headline.reachedHoldingRate)} still hold it and ` +
+          `${pct(headline.reachedUsedRate)} reached it and then withdrew, e.g. to pay for what they saved for. Counting only goals at target today would miss the second group.`,
+        columns: [
+          { key: 'status', header: 'Status', format: 'text' },
+          { key: 'goals', header: 'Goals', format: 'int' },
+          { key: 'share', header: 'Share of goals', format: 'pct' },
+          { key: 'value', header: 'Current value (UGX)', format: 'ugx' },
+        ],
+        rows: report.statuses.map((s) => ({ status: statusLabels[s.key] ?? s.key, goals: s.goals, share: s.share, value: s.value })),
+      },
+      achievementTable('goal-achievement-target-size', 'Goal targets reached, by target size', byDimension('targetSize'), method),
+      achievementTable('goal-achievement-ever-category', 'Goal targets reached (ever), by goal category', byDimension('goalCategory'), `${method} ${sizeNote}`),
+      achievementTable(
+        'goal-achievement-gender',
+        'Goal targets reached, by gender',
+        byDimension('gender'),
+        `${method} Probability-weighted: declared gender, else estimated from the client's name (see Read me); goal counts are therefore estimates.`
+      ),
+      achievementTable('goal-achievement-channel', 'Goal targets reached, by sign-up channel', byDimension('signupChannel'), `${method} ${sizeNote}`),
+      achievementTable('goal-achievement-location', 'Goal targets reached, by location', byDimension('locationGroup'), `${method} ${sizeNote}`),
+      {
+        id: 'goal-pace',
+        question: 'Q3',
+        title: 'Goals on the way: time to target at the current saving pace',
+        note: `Goals not yet at target, by how long the remaining amount would take at their net saving rate over the last 12 months of data (to ${asOf.transactions}). Ultima holds no target dates, so this is a pace estimate, not an "on track" measure.`,
+        columns: [
+          { key: 'pace', header: 'Time to target', format: 'text' },
+          { key: 'goals', header: 'Goals', format: 'int' },
+          { key: 'share', header: 'Share', format: 'pct' },
+        ],
+        rows: report.paceBands.map((p) => ({ pace: String(p.key).replace(/^\d+\.\s/, ''), goals: p.goals, share: p.share })),
+      },
+      {
+        id: 'goal-target-setting',
+        question: 'Q3',
+        title: 'Do savers with a target save more regularly?',
+        note: `All individual goals in the Ultima goal statistics. Saving activity is from this system's data (last 12 months to ${asOf.transactions}).`,
+        columns: [
+          { key: 'group', header: 'Goals', format: 'text' },
+          { key: 'goals', header: 'Number', format: 'int' },
+          { key: 'savedRate', header: 'Deposited in last 12 months', format: 'pct' },
+          { key: 'medianDeposits', header: 'Median deposits (savers, 12m)', format: 'int' },
+          { key: 'medianAmount', header: 'Median amount deposited (savers, 12m, UGX)', format: 'ugx' },
+          { key: 'medianValue', header: 'Median current value (UGX)', format: 'ugx' },
+        ],
+        rows: report.targetSetting.map((t) => ({
+          group: t.key === 'WITH_TARGET' ? 'With a target' : 'No target',
+          goals: t.goals,
+          savedRate: t.savedInLast12MonthsRate,
+          medianDeposits: t.medianDepositsLast12Months,
+          medianAmount: t.medianAmountLast12Months,
+          medianValue: t.medianValue,
+        })),
+      },
     ];
   }
 
@@ -446,6 +558,10 @@ export class ImpactPackService {
   }
 
   /**
+   * CANDIDATE FOR REMOVAL: superseded by buildGoalAchievementTables (goal-status and the
+   * achievement tables count goals that reached their target and then used the money; these
+   * count only goals at target today). Kept for now so existing readers of the pack still find them.
+   *
    * Progress towards goal targets from the latest Ultima goal snapshot, for
    * individual accounts' goals with a plausible target (UGX 10k to 10bn).
    */

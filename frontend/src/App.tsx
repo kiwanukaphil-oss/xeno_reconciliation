@@ -22,6 +22,8 @@ import {
   FileSpreadsheet,
   ShieldCheck,
   Network,
+  Contact,
+  Trophy,
 } from "lucide-react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
@@ -41,6 +43,8 @@ import GoalComparison from "./components/comparison/GoalComparison";
 import FundComparison from "./components/comparison/FundComparison";
 import ClientInsights from "./components/client-insights/ClientInsights";
 import ProfileDataQuality from "./components/client-insights/ProfileDataQuality";
+import AccountProfiles from "./components/client-insights/AccountProfiles";
+import GoalAchievement from "./components/client-insights/GoalAchievement";
 import ImpactPack from "./components/client-insights/ImpactPack";
 import RiskAllocation from "./components/client-insights/RiskAllocation";
 import GroupSchemes from "./components/client-insights/GroupSchemes";
@@ -153,10 +157,22 @@ const App = () => {
           description: "Value by risk score and goal, drift from target split, suitability review",
         },
         {
+          id: "goal-achievement",
+          name: "Goal Achievement",
+          icon: Trophy,
+          description: "Savings targets reached, used and on the way, by goal and client",
+        },
+        {
           id: "group-schemes",
           name: "Group Schemes",
           icon: Network,
           description: "Member accounts rolled up by SACCO, club, scheme and family sponsor",
+        },
+        {
+          id: "account-profiles",
+          name: "Account Profiles",
+          icon: Contact,
+          description: "Search accounts, see profile details and export follow-up lists",
         },
         {
           id: "profile-data-quality",
@@ -239,8 +255,12 @@ const App = () => {
         return <ClientInsights />;
       case "risk-allocation":
         return <RiskAllocation />;
+      case "goal-achievement":
+        return <GoalAchievement />;
       case "group-schemes":
         return <GroupSchemes />;
+      case "account-profiles":
+        return <AccountProfiles />;
       case "profile-data-quality":
         return <ProfileDataQuality />;
       case "impact-pack":
