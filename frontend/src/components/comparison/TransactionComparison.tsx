@@ -214,7 +214,7 @@ const TransactionComparison = () => {
       <div className="mb-6">
         <div className="flex items-center gap-3 mb-2">
           <Scale className="h-8 w-8 text-blue-600" />
-          <h1 className="text-3xl font-bold text-gray-900">Variance Transactions</h1>
+          <h1 className="text-3xl font-bold text-gray-900">Unmatched Transactions</h1>
         </div>
         <p className="text-gray-600">
           View unmatched transactions identified by Goal Comparison - same data, no drilldown required
@@ -583,7 +583,7 @@ const TransactionComparison = () => {
 
       {/* Info Box */}
       <div className="mt-6 p-4 bg-blue-50 border border-blue-200 rounded-lg text-sm text-blue-800">
-        <p className="font-medium mb-1">About Variance Transactions:</p>
+        <p className="font-medium mb-1">About Unmatched Transactions:</p>
         <p>
           <strong>Missing in Bank:</strong> Fund/Goal transactions that exist in the fund system but have no
           corresponding bank transaction. These need investigation.

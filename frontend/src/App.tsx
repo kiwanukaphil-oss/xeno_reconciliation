@@ -24,6 +24,7 @@ import {
   Network,
   Contact,
   Trophy,
+  Briefcase,
 } from "lucide-react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
@@ -73,7 +74,7 @@ const App = () => {
   const [activeModule, setActiveModule] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    new Set(["uploads", "transactions", "variance-analysis"])
+    new Set(["uploads", "transactions", "reconciliation", "clients-holdings", "client-insights-group"])
   );
 
   const menuStructure: MenuEntry[] = [
@@ -102,9 +103,9 @@ const App = () => {
         },
         {
           id: "fund-prices",
-          name: "Fund Price Upload",
+          name: "Fund Prices",
           icon: DollarSign,
-          description: "Upload daily fund prices",
+          description: "Upload daily fund prices and view current and past prices",
         },
       ],
     },
@@ -120,24 +121,68 @@ const App = () => {
           description: "Aggregated goal transactions",
         },
         {
-          id: "bank-transactions",
-          name: "Bank Transactions",
-          icon: Building2,
-          description: "Uploaded bank transaction records",
-        },
-        {
           id: "fund-transactions",
           name: "Fund Transactions",
           icon: FileText,
           description: "Individual fund transactions",
         },
+        {
+          id: "bank-transactions",
+          name: "Bank Transactions",
+          icon: Building2,
+          description: "Uploaded bank transaction records",
+        },
       ],
     },
     {
-      id: "unit-registry",
-      name: "Unit Registry",
-      icon: Wallet,
-      description: "Client portfolio positions and values",
+      id: "reconciliation",
+      name: "Reconciliation",
+      icon: GitCompare,
+      items: [
+        {
+          id: "goal-comparison",
+          name: "Goal Comparison",
+          icon: Target,
+          description: "Compare totals by goal with smart matching",
+        },
+        {
+          id: "fund-comparison",
+          name: "Fund Comparison",
+          icon: BarChart3,
+          description: "Compare fund-level variances by goal",
+        },
+        {
+          id: "transaction-comparison",
+          name: "Unmatched Transactions",
+          icon: Scale,
+          description: "Review unmatched transactions",
+        },
+      ],
+    },
+    {
+      id: "clients-holdings",
+      name: "Clients & Holdings",
+      icon: Briefcase,
+      items: [
+        {
+          id: "unit-registry",
+          name: "Unit Registry",
+          icon: Wallet,
+          description: "Client portfolio positions and values",
+        },
+        {
+          id: "account-profiles",
+          name: "Account Profiles",
+          icon: Contact,
+          description: "Search accounts, see profile details and export follow-up lists",
+        },
+        {
+          id: "profile-data-quality",
+          name: "Profile Data Quality",
+          icon: ClipboardList,
+          description: "Missing client profile data ranked by AUM",
+        },
+      ],
     },
     {
       id: "client-insights-group",
@@ -169,47 +214,10 @@ const App = () => {
           description: "Member accounts rolled up by SACCO, club, scheme and family sponsor",
         },
         {
-          id: "account-profiles",
-          name: "Account Profiles",
-          icon: Contact,
-          description: "Search accounts, see profile details and export follow-up lists",
-        },
-        {
-          id: "profile-data-quality",
-          name: "Profile Data Quality",
-          icon: ClipboardList,
-          description: "Missing client profile data ranked by AUM",
-        },
-        {
           id: "impact-pack",
           name: "Impact Pack",
           icon: FileSpreadsheet,
           description: "Investor data pack: customer profile, usage and outcomes",
-        },
-      ],
-    },
-    {
-      id: "variance-analysis",
-      name: "Variance Analysis",
-      icon: GitCompare,
-      items: [
-        {
-          id: "goal-comparison",
-          name: "Goal Comparison",
-          icon: Target,
-          description: "Compare totals by goal with smart matching",
-        },
-        {
-          id: "fund-comparison",
-          name: "Fund Comparison",
-          icon: BarChart3,
-          description: "Compare fund-level variances by goal",
-        },
-        {
-          id: "transaction-comparison",
-          name: "Variance Transactions",
-          icon: Scale,
-          description: "Review unmatched transactions",
         },
       ],
     },
