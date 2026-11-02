@@ -48,6 +48,16 @@ export class MaterializedViewService {
         failed.push('account_unit_balances');
       }
 
+      // Refresh account_profile_aum (built on account_unit_balances, so it must come after it)
+      try {
+        await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY account_profile_aum`;
+        refreshed.push('account_profile_aum');
+        logger.info('✅ account_profile_aum refreshed');
+      } catch (error: any) {
+        logger.error('❌ Failed to refresh account_profile_aum:', error);
+        failed.push('account_profile_aum');
+      }
+
       const duration = Date.now() - startTime;
       logger.info(`All materialized views refreshed in ${duration}ms (${refreshed.length} succeeded, ${failed.length} failed)`);
 
@@ -95,6 +105,8 @@ export class MaterializedViewService {
       // Refresh the materialized view concurrently (non-blocking)
       // CONCURRENTLY allows queries to continue during refresh
       await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY account_unit_balances`;
+      // Dependent view: client profiles joined to balances
+      await this.refreshAccountProfileAum();
 
       const duration = Date.now() - startTime;
       logger.info(`Materialized view refreshed successfully in ${duration}ms`);
@@ -116,6 +128,15 @@ export class MaterializedViewService {
         error: error.message,
       };
     }
+  }
+
+  /**
+   * Refresh account_profile_aum (balances + saving activity + Ultima profile per account).
+   * Call after account_unit_balances, and after a client profile import.
+   */
+  static async refreshAccountProfileAum(): Promise<void> {
+    await prisma.$executeRaw`REFRESH MATERIALIZED VIEW CONCURRENTLY account_profile_aum`;
+    logger.info('account_profile_aum refreshed');
   }
 
   /**

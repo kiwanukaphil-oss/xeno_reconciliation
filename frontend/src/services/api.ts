@@ -213,6 +213,32 @@ export const fetchDashboardMetrics = async () => {
   return handleResponse(response);
 };
 
+// Client Insights APIs (profile-based AUM composition, data quality, impact pack)
+export type InsightSegment = "INDIVIDUAL" | "INSTITUTIONAL" | "ALL";
+
+export const fetchClientInsightsSummary = async (segment: InsightSegment) => {
+  const response = await fetch(`${API_URL}/api/client-insights/summary?segment=${segment}`);
+  return handleResponse(response);
+};
+
+export const fetchProfileDataQuality = async (segment: InsightSegment, limit = 50) => {
+  const response = await fetch(`${API_URL}/api/client-insights/data-quality?segment=${segment}&limit=${limit}`);
+  return handleResponse(response);
+};
+
+export const fetchImpactPack = async () => {
+  const response = await fetch(`${API_URL}/api/client-insights/impact-pack`);
+  return handleResponse(response);
+};
+
+export const downloadImpactPack = async () => {
+  const response = await fetch(`${API_URL}/api/client-insights/impact-pack/export`);
+  if (!response.ok) {
+    throw new Error("Failed to download impact pack");
+  }
+  return response.blob();
+};
+
 // Bank Reconciliation APIs
 export const uploadBankFile = async (file: File, uploadedBy: string, metadata?: any) => {
   const formData = new FormData();

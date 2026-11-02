@@ -16,6 +16,10 @@ import {
   ChevronRight,
   FolderOpen,
   GitCompare,
+  Users,
+  PieChart,
+  ClipboardList,
+  FileSpreadsheet,
 } from "lucide-react";
 import { QueryClientProvider } from "@tanstack/react-query";
 import { ReactQueryDevtools } from "@tanstack/react-query-devtools";
@@ -33,6 +37,9 @@ import { UnitRegistry } from "./components/unit-registry/UnitRegistry";
 import TransactionComparison from "./components/comparison/TransactionComparison";
 import GoalComparison from "./components/comparison/GoalComparison";
 import FundComparison from "./components/comparison/FundComparison";
+import ClientInsights from "./components/client-insights/ClientInsights";
+import ProfileDataQuality from "./components/client-insights/ProfileDataQuality";
+import ImpactPack from "./components/client-insights/ImpactPack";
 
 interface MenuItem {
   id: string;
@@ -125,6 +132,31 @@ const App = () => {
       description: "Client portfolio positions and values",
     },
     {
+      id: "client-insights-group",
+      name: "Client Insights",
+      icon: Users,
+      items: [
+        {
+          id: "client-insights",
+          name: "Client Composition",
+          icon: PieChart,
+          description: "AUM by gender, age, location, channel and saving behaviour",
+        },
+        {
+          id: "profile-data-quality",
+          name: "Profile Data Quality",
+          icon: ClipboardList,
+          description: "Missing client profile data ranked by AUM",
+        },
+        {
+          id: "impact-pack",
+          name: "Impact Pack",
+          icon: FileSpreadsheet,
+          description: "Investor data pack: customer profile, usage and outcomes",
+        },
+      ],
+    },
+    {
       id: "variance-analysis",
       name: "Variance Analysis",
       icon: GitCompare,
@@ -187,6 +219,12 @@ const App = () => {
         return <FundTransactions />;
       case "bank-transactions":
         return <BankTransactions />;
+      case "client-insights":
+        return <ClientInsights />;
+      case "profile-data-quality":
+        return <ProfileDataQuality />;
+      case "impact-pack":
+        return <ImpactPack />;
       default:
         return <Dashboard />;
     }

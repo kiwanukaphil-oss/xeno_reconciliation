@@ -16,6 +16,7 @@ import bankReconciliationRoutes from './routes/bankReconciliationRoutes';
 import bankUploadRoutes from './routes/bankUploadRoutes';
 import goalComparisonRoutes from './routes/goalComparisonRoutes';
 import varianceResolutionRoutes from './routes/varianceResolutionRoutes';
+import clientInsightsRoutes from './routes/clientInsightsRoutes';
 
 const app = express();
 
@@ -64,6 +65,7 @@ app.use('/api/bank-reconciliation', bankReconciliationRoutes);
 app.use('/api/bank-upload', bankUploadRoutes);
 app.use('/api/goal-comparison', goalComparisonRoutes);
 app.use('/api/variance-resolution', varianceResolutionRoutes);
+app.use('/api/client-insights', clientInsightsRoutes);
 
 // 404 handler
 app.use(notFoundHandler);
