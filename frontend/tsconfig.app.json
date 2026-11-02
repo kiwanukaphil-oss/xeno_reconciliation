@@ -16,8 +16,7 @@
     "noEmit": true,
     "jsx": "react-jsx",
 
-    /* Path Mapping */
-    "baseUrl": ".",
+    /* Path Mapping (paths resolve relative to this file; baseUrl is deprecated) */
     "paths": {
       "@/*": ["./src/*"]
     },

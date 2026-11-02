@@ -2,6 +2,7 @@ import express, { Request, Response, NextFunction } from 'express';
 import { upload, handleUploadErrors } from '../middleware/upload';
 import { BadRequestError, NotFoundError, ValidationError } from '../errors';
 import { logger } from '../config/logger';
+import { prisma } from '../config/database';
 import { bankReconciliationQueue, JobNames } from '../config/queue';
 import { BankUploadBatchManager } from '../services/bank-upload/database/BankUploadBatchManager';
 import { BankTransactionRepository } from '../services/bank-upload/database/BankTransactionRepository';
@@ -232,7 +233,6 @@ router.delete('/batches/:batchId/rollback', async (req: Request, res: Response, 
     const deletedTransactions = await BankTransactionRepository.deleteTransactionsByBatchId(batchId);
 
     // Delete the batch
-    const { prisma } = await import('../config/database');
     await prisma.bankUploadBatch.delete({
       where: { id: batchId },
     });
@@ -568,8 +568,6 @@ router.get('/reconciliation/stats', async (_req: Request, res: Response, next: N
  */
 router.get('/comparison', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { prisma } = await import('../config/database');
-
     const page = parseInt(req.query.page as string) || 1;
     const limit = parseInt(req.query.limit as string) || 50;
     const startDate = req.query.startDate as string;
@@ -1038,8 +1036,6 @@ router.get('/comparison', async (req: Request, res: Response, next: NextFunction
  */
 router.get('/comparison/export', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const { prisma } = await import('../config/database');
-
     const startDate = req.query.startDate as string;
     const endDate = req.query.endDate as string;
     const goalNumber = req.query.goalNumber as string;
