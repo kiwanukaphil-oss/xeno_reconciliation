@@ -1,4 +1,5 @@
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Download, Info, Loader2 } from "lucide-react";
 import { downloadImpactPack, fetchImpactPack } from "../../services/api";
 import { formatCount, formatDate, formatGroupLabel, formatPct, formatUGX, saveBlob } from "./insightFormat";
@@ -24,6 +25,12 @@ interface ImpactPackData {
   notCaptured: Array<{ item: string; note: string }>;
   tables: PackTable[];
 }
+
+// Building the pack takes a few seconds, so a built pack is kept for the session: returning to the
+// page (or to an as-at date already viewed) shows it at once. After STALE_MS it is rebuilt in the
+// background while the kept copy stays on screen.
+const PACK_STALE_MS = 5 * 60 * 1000;
+const PACK_KEEP_MS = 60 * 60 * 1000;
 
 const formatCell = (value: string | number | null | undefined, format: PackColumnFormat) => {
   if (value === null || value === undefined) return "–";
@@ -71,53 +78,38 @@ const PackTableView = ({ table }: { table: PackTable }) => (
 /**
  * Impact & Inclusion data pack: answers the investor questions on customer
  * profile, usage and outcomes, with definitions, caveats and what the system
- * does not capture. Downloadable as Excel for sharing.
+ * does not capture. Downloadable as Excel for sharing. Built packs are cached per
+ * as-at date for the session (see PACK_STALE_MS).
  */
 const ImpactPack = () => {
-  const [pack, setPack] = useState<ImpactPackData | null>(null);
-  const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [downloadError, setDownloadError] = useState<string | null>(null);
 
   const { asOf } = useInsightAsOf();
 
-  useEffect(() => {
-    let active = true;
-    loadPack(() => active);
-    // A slower, older request (e.g. a date still being prepared) must not overwrite a newer pack
-    return () => {
-      active = false;
-    };
-  }, [asOf]);
-
-  const loadPack = async (isActive: () => boolean = () => true) => {
-    try {
-      setLoading(true);
-      setError(null);
-      const result = await fetchImpactPack(asOf);
-      if (isActive()) setPack(result);
-    } catch (err: any) {
-      console.error("Failed to load impact pack:", err);
-      if (isActive()) setError(err.message || "Failed to load impact pack");
-    } finally {
-      if (isActive()) setLoading(false);
-    }
-  };
+  // Keyed by as-at date, so a slower response for an earlier date can never replace the current one
+  const { data: pack, error, isPending, isFetching, refetch } = useQuery<ImpactPackData>({
+    queryKey: ["impact-pack", asOf],
+    queryFn: () => fetchImpactPack(asOf),
+    staleTime: PACK_STALE_MS,
+    gcTime: PACK_KEEP_MS,
+  });
 
   const handleDownload = async () => {
     try {
       setDownloading(true);
+      setDownloadError(null);
       const blob = await downloadImpactPack(asOf);
       const fileDate = asOf ? `as-at-${asOf}` : pack?.asOf.transactions ?? "latest";
       saveBlob(blob, `xeno-impact-pack-${fileDate}.xlsx`);
     } catch (err: any) {
-      setError(err.message || "Failed to download impact pack");
+      setDownloadError(err.message || "Failed to download impact pack");
     } finally {
       setDownloading(false);
     }
   };
 
-  if (loading) {
+  if (isPending) {
     return (
       <div className="flex flex-col items-center justify-center h-64 gap-3">
         <Loader2 className="w-10 h-10 animate-spin text-blue-600" />
@@ -126,12 +118,13 @@ const ImpactPack = () => {
     );
   }
 
-  if (error || !pack) {
+  // A failed background refresh keeps the cached pack on screen; the error panel is only for having nothing to show
+  if (!pack) {
     return (
       <div className="p-6">
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
-          <p className="text-red-800">{error}</p>
-          <button onClick={() => loadPack()} className="mt-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">
+          <p className="text-red-800">{(error as Error | null)?.message ?? "Failed to load impact pack"}</p>
+          <button onClick={() => refetch()} className="mt-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">
             Retry
           </button>
         </div>
@@ -145,6 +138,11 @@ const ImpactPack = () => {
         <p className="text-sm text-gray-600">
           Transactions to {formatDate(pack.asOf.transactions)} · prices of {formatDate(pack.asOf.prices)} · Ultima goal
           statistics of {formatDate(pack.asOf.ultimaGoalSnapshot)}
+          {isFetching && (
+            <span className="inline-flex items-center ml-2 text-gray-500">
+              <Loader2 className="w-3.5 h-3.5 mr-1 animate-spin" /> Refreshing…
+            </span>
+          )}
         </p>
         <button
           onClick={handleDownload}
@@ -155,6 +153,9 @@ const ImpactPack = () => {
           Download Excel
         </button>
       </div>
+      {downloadError && (
+        <div className="bg-red-50 border border-red-200 rounded-lg p-3 text-sm text-red-800">{downloadError}</div>
+      )}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <div className="bg-white rounded-lg shadow p-6">
