@@ -52,3 +52,6 @@ NUL
 
 # Client personal data exports (Ultima)
 Client data/
+
+# One-off scratch scripts flagged for removal (see scripts/_to_remove/README.md)
+scripts/_to_remove/
