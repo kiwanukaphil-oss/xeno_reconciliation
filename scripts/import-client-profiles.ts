@@ -4,6 +4,7 @@ import { prisma } from '../src/config/database';
 import { ClientProfileImporter } from '../src/services/client-profile/ClientProfileImporter';
 import { GenderEstimator } from '../src/services/client-profile/GenderEstimator';
 import { MaterializedViewService } from '../src/services/unit-registry/MaterializedViewService';
+import { InsightSnapshotService } from '../src/services/client-insights/InsightSnapshotService';
 
 /**
  * Imports account profiles, goal enrichment and Ultima goal snapshots (targets, values)
@@ -39,6 +40,8 @@ async function runClientProfileImport() {
       console.log(`Gender estimates: ${estimate.scoredAccounts} scored, ${estimate.labelledEstimates} labelled (hold-out accuracy ${(estimate.holdout.accuracy * 100).toFixed(1)}%)`);
       console.log('Refreshing account_profile_aum and goal_holdings views...');
       await MaterializedViewService.refreshClientInsightViews();
+      // Profiles and goal targets feed every as-at snapshot; they rebuild on the next upload or when opened
+      await InsightSnapshotService.markStaleFrom(null, 'client profile import', { scheduleRebuild: false });
     }
     const reportPath = path.join('logs', `client-profile-import-${new Date().toISOString().replace(/[:.]/g, '-')}.json`);
     fs.mkdirSync('logs', { recursive: true });
@@ -52,6 +55,7 @@ async function runClientProfileImport() {
     console.log(`  without profile:    ${accounts.withoutProfile}`);
     console.log(`Export rows ignored:  ${accounts.exportRowsNotInSystem} not in system, ${accounts.duplicateExportRows} duplicates`);
     console.log(`Goals in system:      ${goals.inSystem}, enriched ${goals.enriched}, goalType filled ${goals.goalTypeFilledFromOther}`);
+    console.log(`Sign-up counts:       ${report.signups.accountsCounted} accounts, months written: ${report.signups.monthsWritten.length ? `${report.signups.monthsWritten[0]} to ${report.signups.monthsWritten[report.signups.monthsWritten.length - 1]}` : '-'}`);
     console.log(`Ultima goal snapshots: ${goals.ultimaSnapshots} (as of ${goals.snapshotAsOfDates.join(', ') || '-'}), targets ${goals.targetsFromUltima}`);
     for (const [name, counts] of Object.entries(report.distributions)) {
       console.log(`${name}: ${JSON.stringify(counts)}`);

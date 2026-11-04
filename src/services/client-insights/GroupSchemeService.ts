@@ -1,5 +1,6 @@
 import { prisma } from '../../config/database';
 import { MIN_REPORTABLE_GROUP_SIZE } from './ClientInsightsService';
+import { InsightSources, LATEST_SOURCES } from './InsightSources';
 
 /**
  * Roll-up of member accounts by sponsor (SACCOs, investment clubs, retirement
@@ -11,12 +12,12 @@ import { MIN_REPORTABLE_GROUP_SIZE } from './ClientInsightsService';
  * such as WEALTH or Contributions, so it is not used.)
  */
 export class GroupSchemeService {
-  static async getGroupSchemes() {
+  static async getGroupSchemes(sources: InsightSources = LATEST_SOURCES) {
     const groups = await prisma.$queryRaw<any[]>`
       WITH members AS (
         SELECT ap."sponsorAccountNumber" AS sponsor_account_number, ap."institutionName" AS institution_name, v.*
         FROM account_profiles ap
-        JOIN account_profile_aum v ON v.account_id = ap."accountId"
+        JOIN ${sources.accounts('v')} ON v.account_id = ap."accountId"
         WHERE ap."sponsorAccountNumber" IS NOT NULL
       )
       SELECT m.sponsor_account_number,
@@ -36,7 +37,7 @@ export class GroupSchemeService {
       FROM members m
       LEFT JOIN accounts s ON s."accountNumber" = m.sponsor_account_number
       LEFT JOIN clients sc ON sc.id = s."clientId"
-      LEFT JOIN account_profile_aum sp ON sp.account_id = s.id
+      LEFT JOIN ${sources.accounts('sp')} ON sp.account_id = s.id
       GROUP BY m.sponsor_account_number, sc."clientName", s.id
       ORDER BY member_aum DESC`;
 
@@ -68,6 +69,7 @@ export class GroupSchemeService {
     }
 
     return {
+      asOf: sources.asOf,
       summary: {
         groups: rows.length,
         members: rows.reduce((s, r) => s + r.members, 0),

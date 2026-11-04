@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, Loader2 } from "lucide-react";
 import { fetchProfileDataQuality } from "../../services/api";
 import { formatCount, formatPct, formatUGX, formatUGXCompact } from "./insightFormat";
+import { useInsightAsOf } from "./InsightAsOf";
 
 interface DataQualityReport {
   fundedAccounts: number;
@@ -32,20 +33,28 @@ const ProfileDataQuality = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadReport();
-  }, []);
+  const { asOf } = useInsightAsOf();
 
-  const loadReport = async () => {
+  useEffect(() => {
+    let active = true;
+    loadReport(() => active);
+    // A slower, older request (e.g. a date still being prepared) must not overwrite newer figures
+    return () => {
+      active = false;
+    };
+  }, [asOf]);
+
+  const loadReport = async (isActive: () => boolean = () => true) => {
     try {
       setLoading(true);
       setError(null);
-      setReport(await fetchProfileDataQuality("INDIVIDUAL", 50));
+      const result = await fetchProfileDataQuality("INDIVIDUAL", 50, asOf);
+      if (isActive()) setReport(result);
     } catch (err: any) {
       console.error("Failed to load profile data quality:", err);
-      setError(err.message || "Failed to load profile data quality");
+      if (isActive()) setError(err.message || "Failed to load profile data quality");
     } finally {
-      setLoading(false);
+      if (isActive()) setLoading(false);
     }
   };
 
@@ -62,7 +71,7 @@ const ProfileDataQuality = () => {
       <div className="p-6">
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
           <p className="text-red-800">{error}</p>
-          <button onClick={loadReport} className="mt-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">
+          <button onClick={() => loadReport()} className="mt-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">
             Retry
           </button>
         </div>

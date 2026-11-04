@@ -8,6 +8,7 @@ import {
   WeightedGenderSplit,
 } from './ClientInsightsService';
 import { AchievementBreakdown, GoalAchievementService } from './GoalAchievementService';
+import { InsightSources, LATEST_SOURCES } from './InsightSources';
 
 export type PackQuestion = 'Q1' | 'Q2' | 'Q3';
 export type PackColumnFormat = 'text' | 'int' | 'ugx' | 'pct';
@@ -29,7 +30,8 @@ export interface PackTable {
 
 export interface ImpactPack {
   generatedAt: string;
-  asOf: { transactions: string; prices: string; ultimaGoalSnapshot: string | null };
+  /** snapshot: the as-at date the pack was built for (null = Latest). */
+  asOf: { snapshot: string | null; transactions: string; prices: string; ultimaGoalSnapshot: string | null };
   questions: Record<PackQuestion, string>;
   readMe: string[];
   notCaptured: Array<{ item: string; note: string }>;
@@ -68,12 +70,14 @@ const STANDARD_GROUPINGS: Array<{ label: string; expression: string }> = [
  * presented as complete.
  */
 export class ImpactPackService {
-  static async buildPack(): Promise<ImpactPack> {
+  static async buildPack(sources: InsightSources = LATEST_SOURCES): Promise<ImpactPack> {
     const [asOf] = await prisma.$queryRaw<any[]>`
       SELECT MIN(data_as_of)::text AS transactions, MIN(price_as_of)::text AS prices,
-             (SELECT MAX("asOfDate")::text FROM ultima_goal_snapshots) AS ultima
-      FROM account_profile_aum`;
-    const summary = await ClientInsightsService.getSummary('INDIVIDUAL');
+             (SELECT MAX("asOfDate")::text FROM ultima_goal_snapshots) AS ultima,
+             (SELECT MAX("asOfDate")::text FROM ultima_goal_snapshots
+              ${sources.asOf === null ? Prisma.empty : Prisma.sql`WHERE "asOfDate" <= ${sources.asOf}::date`}) AS ultima_by_as_of
+      FROM ${sources.accounts()}`;
+    const summary = await ClientInsightsService.getSummary('INDIVIDUAL', 'ESTIMATED', sources);
     const run = summary.genderEstimate;
     const accuracyNote = run
       ? ` Estimates were ${pct(run.holdoutAccuracy)} accurate on ${fmt(Math.round(run.labelledAccounts * 0.2))} declared accounts held back for testing` +
@@ -84,22 +88,28 @@ export class ImpactPackService {
       `${pct(summary.kpis.genderEstimatedShareOfAccounts)}; ${pct(1 - summary.kpis.genderKnownShareOfAccounts)} remain unknown.` + accuracyNote;
 
     const tables: PackTable[] = [
-      await this.buildAccountBaseTable(),
+      await this.buildAccountBaseTable(sources),
       this.buildWeightedGenderTable(summary.weightedGender, coverage),
-      ...(await this.buildProfileTables(coverage)),
-      ...(await this.buildUsageTables(coverage)),
-      ...(await this.buildOutcomeTables(asOf.ultima)),
+      ...(await this.buildProfileTables(coverage, sources)),
+      ...(await this.buildUsageTables(coverage, sources)),
+      ...(await this.buildOutcomeTables(asOf.ultima_by_as_of, sources)),
     ];
 
     return {
       generatedAt: new Date().toISOString(),
-      asOf: { transactions: asOf.transactions, prices: asOf.prices, ultimaGoalSnapshot: asOf.ultima },
+      asOf: { snapshot: sources.asOf, transactions: asOf.transactions, prices: asOf.prices, ultimaGoalSnapshot: asOf.ultima },
       questions: {
         Q1: 'Customer profile: income levels, livelihoods and location; reach among low-income or underserved savers',
         Q2: 'Usage and accessibility: balances, contributions, saving frequency, USSD vs other channels, by country and gender',
         Q3: 'Customer outcomes: impact indicators, savings goals met, financial resilience',
       },
       readMe: [
+        ...(sources.asOf
+          ? [
+              `All figures are as at ${sources.asOf}: only transactions up to that date are counted, balances use that date's prices and "last 12 months" ends on it. ` +
+                'Client profile fields (gender, location, sign-up channel), goal risk scores and goal targets are current Ultima values.',
+            ]
+          : []),
         `Transactions are complete to ${asOf.transactions}; balances are valued at fund mid prices of ${asOf.prices}.`,
         `Goal targets and progress come from Ultima's goal statistics as of ${asOf.ultima ?? 'n/a'} (a later date than the transaction data).`,
         'Figures count accounts, not people: one person can hold several accounts (e.g. personal and joint).',
@@ -125,14 +135,14 @@ export class ImpactPackService {
   }
 
   /** How many accounts there are under each common definition of "active". */
-  private static async buildAccountBaseTable(): Promise<PackTable> {
+  private static async buildAccountBaseTable(sources: InsightSources): Promise<PackTable> {
     const rows = await prisma.$queryRaw<any[]>`
       SELECT segment,
              COUNT(*) FILTER (WHERE deposit_count > 0)::int AS ever_saved,
              COUNT(*) FILTER (WHERE is_funded)::int AS funded,
              COUNT(*) FILTER (WHERE deposits_12m > 0)::int AS saved_12m,
              COALESCE(SUM(aum) FILTER (WHERE is_funded), 0)::float8 AS aum
-      FROM account_profile_aum GROUP BY segment ORDER BY segment DESC`;
+      FROM ${sources.accounts()} GROUP BY segment ORDER BY segment DESC`;
     const total = rows.reduce(
       (t, r) => ({ ever_saved: t.ever_saved + r.ever_saved, funded: t.funded + r.funded, saved_12m: t.saved_12m + r.saved_12m, aum: t.aum + r.aum }),
       { ever_saved: 0, funded: 0, saved_12m: 0, aum: 0 }
@@ -191,11 +201,11 @@ export class ImpactPackService {
   }
 
   /** Q1: location, gender, age, and the proxies available in place of income data. */
-  private static async buildProfileTables(coverage: string): Promise<PackTable[]> {
-    const fetch = (dimension: string) => ClientInsightsService.getBreakdownByName(dimension, 'INDIVIDUAL');
+  private static async buildProfileTables(coverage: string, sources: InsightSources): Promise<PackTable[]> {
+    const fetch = (dimension: string) => ClientInsightsService.getBreakdownByName(dimension, 'INDIVIDUAL', 'ESTIMATED', sources);
     const [location, region, district, gender, genderDeclared, age, channel, balanceBands] = await Promise.all([
       fetch('locationGroup'), fetch('region'), fetch('district'), fetch('gender'),
-      ClientInsightsService.getBreakdownByName('gender', 'INDIVIDUAL', 'DECLARED'),
+      ClientInsightsService.getBreakdownByName('gender', 'INDIVIDUAL', 'DECLARED', sources),
       fetch('ageBand'), fetch('signupChannel'), fetch('balanceBand'),
     ]);
     const knownNote = (b: Breakdown) => `Known for ${pct(b.knownShareOfAccounts)} of accounts (${pct(b.knownShareOfAum)} of AUM).`;
@@ -213,9 +223,10 @@ export class ImpactPackService {
   }
 
   /** Q2: balances, contributions, saving frequency, channels and country. */
-  private static async buildUsageTables(coverage: string): Promise<PackTable[]> {
-    const balances = await this.distributionTable('balances', 'Balance per account (UGX)', 'aum', INDIVIDUAL_FUNDED, `Individual funded accounts. ${coverage}`);
+  private static async buildUsageTables(coverage: string, sources: InsightSources): Promise<PackTable[]> {
+    const balances = await this.distributionTable(sources, 'balances', 'Balance per account (UGX)', 'aum', INDIVIDUAL_FUNDED, `Individual funded accounts. ${coverage}`);
     const contributions = await this.distributionTable(
+      sources,
       'contributions-12m',
       'Amount deposited per account in the last 12 months (UGX)',
       'deposit_amount_12m',
@@ -223,6 +234,7 @@ export class ImpactPackService {
       'Individual accounts that made at least one deposit in the last 12 months.'
     );
     const depositSize = await this.distributionTable(
+      sources,
       'deposit-size',
       'Typical deposit size: each account\'s median deposit (UGX)',
       'median_deposit',
@@ -230,6 +242,7 @@ export class ImpactPackService {
       'Individual accounts that have ever deposited; one value per account (its median deposit).'
     );
     const depositsPerYear = await this.distributionTable(
+      sources,
       'deposits-per-year',
       'Number of deposits per account in the last 12 months',
       'deposits_12m',
@@ -237,11 +250,11 @@ export class ImpactPackService {
       'Individual accounts that deposited in the last 12 months. Values are counts, not UGX.',
       'int'
     );
-    const frequency = await this.frequencyCrosstab();
-    const transactionSources = await this.transactionSourceTable();
+    const frequency = await this.frequencyCrosstab(sources);
+    const transactionSources = await this.transactionSourceTable(sources);
     const [channel, abroad] = await Promise.all([
-      ClientInsightsService.getBreakdownByName('signupChannel', 'INDIVIDUAL'),
-      ClientInsightsService.getBreakdownByName('abroadCountry', 'INDIVIDUAL'),
+      ClientInsightsService.getBreakdownByName('signupChannel', 'INDIVIDUAL', 'ESTIMATED', sources),
+      ClientInsightsService.getBreakdownByName('abroadCountry', 'INDIVIDUAL', 'ESTIMATED', sources),
     ]);
 
     return [
@@ -257,8 +270,8 @@ export class ImpactPackService {
   }
 
   /** Q3: persistence, dormancy, rebuilding after withdrawals, emergency buffers and goal achievement. */
-  private static async buildOutcomeTables(ultimaAsOf: string | null): Promise<PackTable[]> {
-    const achievement = await GoalAchievementService.getReport('INDIVIDUAL');
+  private static async buildOutcomeTables(ultimaAsOf: string | null, sources: InsightSources): Promise<PackTable[]> {
+    const achievement = await GoalAchievementService.getReport('INDIVIDUAL', sources);
     const h = achievement.headline;
     const [k] = await prisma.$queryRaw<any[]>`
       SELECT
@@ -270,15 +283,17 @@ export class ImpactPackService {
         COUNT(*) FILTER (WHERE withdrawal_count > 0)::int AS withdrew,
         COUNT(*) FILTER (WHERE withdrawal_count > 0 AND last_deposit_date > last_withdrawal_date)::int AS rebuilt,
         COUNT(*) FILTER (WHERE is_funded AND has_emergency_goal)::int AS emergency_holders
-      FROM account_profile_aum WHERE segment = 'INDIVIDUAL'`;
+      FROM ${sources.accounts()} WHERE segment = 'INDIVIDUAL'`;
     const [emergency] = await prisma.$queryRaw<any[]>`
-      WITH px AS (SELECT DISTINCT ON ("fundId") "fundId", "midPrice" FROM fund_prices ORDER BY "fundId", "priceDate" DESC),
+      WITH px AS (SELECT DISTINCT ON ("fundId") "fundId", "midPrice" FROM fund_prices
+                  WHERE "priceDate" < ${sources.priceCutoff} + 1 ORDER BY "fundId", "priceDate" DESC),
       goal_value AS (
         SELECT ft."goalId", SUM(ft.units * px."midPrice") AS value
         FROM fund_transactions ft
         JOIN goals g ON g.id = ft."goalId" AND g."goalType" = 'EMERGENCY'
         JOIN accounts a ON a.id = g."accountId" AND a."accountType" IN ('PERSONAL', 'JOINT')
         JOIN px ON px."fundId" = ft."fundId"
+        WHERE ft."transactionDate" < ${sources.transactionCutoff} + 1
         GROUP BY ft."goalId")
       SELECT COUNT(*) FILTER (WHERE value >= 5000)::int AS funded_goals,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY value) FILTER (WHERE value >= 5000)::float8 AS median_value
@@ -310,7 +325,7 @@ export class ImpactPackService {
         ],
         rows: indicators.map((i) => ({ label: i.label, value: formatValue(i.value, i.format), base: i.base })),
       },
-      await this.persistenceByCohortTable(),
+      await this.persistenceByCohortTable(sources),
       ...this.buildGoalAchievementTables(achievement),
       ...(await this.goalAchievementTables(ultimaAsOf)),
     ];
@@ -426,6 +441,7 @@ export class ImpactPackService {
    * grouping. Groups smaller than the minimum size are left out.
    */
   private static async distributionTable(
+    sources: InsightSources,
     id: string,
     title: string,
     valueColumn: string,
@@ -443,7 +459,7 @@ export class ImpactPackService {
           percentile_cont(0.75) WITHIN GROUP (ORDER BY ${Prisma.raw(valueColumn)})::float8 AS p75,
           percentile_cont(0.9) WITHIN GROUP (ORDER BY ${Prisma.raw(valueColumn)})::float8 AS p90,
           AVG(${Prisma.raw(valueColumn)})::float8 AS mean
-        FROM account_profile_aum
+        FROM ${sources.accounts()}
         WHERE ${filter} AND ${Prisma.raw(valueColumn)} IS NOT NULL
         GROUP BY 1 ORDER BY (${Prisma.raw(grouping.expression)}) = 'UNKNOWN', n DESC`;
       for (const r of result.filter((x) => x.n >= MIN_REPORTABLE_GROUP_SIZE)) {
@@ -459,7 +475,7 @@ export class ImpactPackService {
    * channel. Gender columns are probability-weighted (each account adds its female
    * probability to Female and the rest to Male), like the headline gender table.
    */
-  private static async frequencyCrosstab(): Promise<PackTable> {
+  private static async frequencyCrosstab(sources: InsightSources): Promise<PackTable> {
     const columns = [
       { key: 'all', header: 'All', weight: '1' },
       { key: 'female', header: 'Female (estimated)', weight: 'COALESCE(female_probability, 0)' },
@@ -472,7 +488,7 @@ export class ImpactPackService {
     const counts = columns.map((c) => Prisma.raw(`SUM(${c.weight})::float8 AS "${c.key}"`));
     const result = await prisma.$queryRaw<any[]>`
       SELECT ${Prisma.raw(DEPOSIT_FREQUENCY_SQL)} AS band, ${Prisma.join(counts)}
-      FROM account_profile_aum WHERE ${INDIVIDUAL_FUNDED} GROUP BY 1 ORDER BY 1`;
+      FROM ${sources.accounts()} WHERE ${INDIVIDUAL_FUNDED} GROUP BY 1 ORDER BY 1`;
     const totals = Object.fromEntries(columns.map((c) => [c.key, result.reduce((s, r) => s + r[c.key], 0)]));
     return {
       id: 'saving-frequency',
@@ -488,13 +504,13 @@ export class ImpactPackService {
   }
 
   /** Channel each deposit came through in the last 12 months (where the source is recorded). */
-  private static async transactionSourceTable(): Promise<PackTable> {
+  private static async transactionSourceTable(sources: InsightSources): Promise<PackTable> {
     const result = await prisma.$queryRaw<any[]>`
-      WITH cutoff AS (SELECT MAX("transactionDate") AS d FROM fund_transactions),
+      WITH cutoff AS (SELECT ${sources.transactionCutoff}::timestamp AS d),
       deposits AS (
         SELECT "goalTransactionCode", MIN(source::text) AS source, SUM(amount) AS net
         FROM fund_transactions, cutoff
-        WHERE "transactionDate" > cutoff.d - INTERVAL '12 months'
+        WHERE "transactionDate" > cutoff.d - INTERVAL '12 months' AND "transactionDate" < cutoff.d + INTERVAL '1 day'
         GROUP BY "goalTransactionCode" HAVING SUM(amount) >= 1)
       SELECT COALESCE(source, 'Not recorded') AS source, COUNT(*)::int AS deposits, SUM(net)::float8 AS amount
       FROM deposits GROUP BY 1 ORDER BY 2 DESC`;
@@ -524,13 +540,13 @@ export class ImpactPackService {
   }
 
   /** For each year accounts started saving: how many are still saving and still funded. */
-  private static async persistenceByCohortTable(): Promise<PackTable> {
+  private static async persistenceByCohortTable(sources: InsightSources): Promise<PackTable> {
     const result = await prisma.$queryRaw<any[]>`
       SELECT EXTRACT(YEAR FROM first_deposit_date)::int AS cohort, COUNT(*)::int AS accounts,
              COUNT(*) FILTER (WHERE deposits_12m > 0)::int AS saving,
              COUNT(*) FILTER (WHERE is_funded)::int AS funded,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY aum) FILTER (WHERE is_funded)::float8 AS median_balance
-      FROM account_profile_aum
+      FROM ${sources.accounts()}
       WHERE segment = 'INDIVIDUAL' AND first_deposit_date IS NOT NULL
       GROUP BY 1 ORDER BY 1`;
     return {

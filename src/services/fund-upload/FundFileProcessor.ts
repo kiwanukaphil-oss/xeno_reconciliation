@@ -8,6 +8,7 @@ import { UploadBatchManager } from './database/UploadBatchManager';
 import { FundTransactionRepository } from './database/FundTransactionRepository';
 import { ParsedFundTransaction } from '../../types/fundTransaction';
 import { MaterializedViewService } from '../unit-registry/MaterializedViewService';
+import { InsightSnapshotService } from '../client-insights/InsightSnapshotService';
 
 /**
  * Main processor for fund transaction file uploads
@@ -287,6 +288,18 @@ export class FundFileProcessor {
         name: error.name
       });
       logger.warn('Upload completed but materialized views not refreshed - manual refresh may be needed');
+    }
+
+    // Client Insights "as at" snapshots on or after the earliest transaction date in this batch
+    // no longer include everything; mark them stale (month-ends rebuild in the background)
+    try {
+      const earliest = transactions.reduce<Date | null>(
+        (min, t) => (t.transactionDate && (!min || t.transactionDate < min) ? t.transactionDate : min),
+        null
+      );
+      await InsightSnapshotService.markStaleFrom(earliest ? earliest.toISOString().slice(0, 10) : null, `upload batch ${batchId}`);
+    } catch (error: any) {
+      logger.error(`Failed to mark insight snapshots stale after batch ${batchId}: ${error.message}`);
     }
 
     logger.info(`Processing completed successfully for batch ${batchId}`);

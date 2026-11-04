@@ -4,6 +4,7 @@ import { fetchClientInsightsSummary, type GenderBasis, type InsightSegment } fro
 import { BreakdownBarList, type Breakdown, type InsightMetric } from "./BreakdownBarList";
 import { formatCount, formatDate, formatPct, formatUGXCompact, SEGMENT_OPTIONS } from "./insightFormat";
 import { StatTile, ToggleGroup } from "./InsightControls";
+import { useInsightAsOf } from "./InsightAsOf";
 
 interface InsightsSummary {
   segment: InsightSegment;
@@ -52,20 +53,28 @@ const ClientInsights = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadSummary(segment, genderBasis);
-  }, [segment, genderBasis]);
+  const { asOf } = useInsightAsOf();
 
-  const loadSummary = async (selected: InsightSegment, basis: GenderBasis) => {
+  useEffect(() => {
+    let active = true;
+    loadSummary(segment, genderBasis, () => active);
+    // A slower, older request (e.g. a date still being prepared) must not overwrite newer figures
+    return () => {
+      active = false;
+    };
+  }, [segment, genderBasis, asOf]);
+
+  const loadSummary = async (selected: InsightSegment, basis: GenderBasis, isActive: () => boolean = () => true) => {
     try {
       setLoading(true);
       setError(null);
-      setSummary(await fetchClientInsightsSummary(selected, basis));
+      const result = await fetchClientInsightsSummary(selected, basis, asOf);
+      if (isActive()) setSummary(result);
     } catch (err: any) {
       console.error("Failed to load client insights:", err);
-      setError(err.message || "Failed to load client insights");
+      if (isActive()) setError(err.message || "Failed to load client insights");
     } finally {
-      setLoading(false);
+      if (isActive()) setLoading(false);
     }
   };
 
@@ -85,7 +94,7 @@ const ClientInsights = () => {
             <ToggleGroup options={GENDER_BASIS_OPTIONS} value={genderBasis} onChange={setGenderBasis} />
           )}
         </div>
-        {summary && (
+        {summary && !loading && (
           <p className="text-sm text-gray-600">
             Funded accounts (UGX 5,000+) · transactions to {formatDate(summary.asOf.transactions)} ·
             prices of {formatDate(summary.asOf.prices)}

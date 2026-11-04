@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Loader2, X } from "lucide-react";
 import { fetchAccountProfileDetail } from "../../services/api";
 import type { GenderEstimate } from "./AccountProfiles";
+import { useInsightAsOf } from "./InsightAsOf";
 import { FUND_CODES, formatCount, formatDate, formatGroupLabel, formatPct, formatUGX } from "./insightFormat";
 
 type FundPct = Record<(typeof FUND_CODES)[number], number | null>;
@@ -85,9 +86,10 @@ const formatFundMix = (pct: FundPct) =>
  * when opened and cached, so reopening an account is instant. Esc closes it.
  */
 const AccountProfileDetail = ({ accountNumber, onClose }: { accountNumber: string; onClose: () => void }) => {
+  const { asOf } = useInsightAsOf();
   const { data, error, isPending } = useQuery<AccountDetail>({
-    queryKey: ["account-profile", accountNumber],
-    queryFn: ({ signal }) => fetchAccountProfileDetail(accountNumber, signal),
+    queryKey: ["account-profile", accountNumber, asOf],
+    queryFn: ({ signal }) => fetchAccountProfileDetail(accountNumber, signal, asOf),
     staleTime: 60 * 1000,
   });
 

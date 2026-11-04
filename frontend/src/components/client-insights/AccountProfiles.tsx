@@ -3,6 +3,7 @@ import { keepPreviousData, useQuery, useQueryClient } from "@tanstack/react-quer
 import { ArrowDown, ArrowUp, ChevronLeft, ChevronRight, Download, Loader2, Search } from "lucide-react";
 import { accountProfilesExportUrl, fetchAccountProfiles, type AccountDirectoryQuery, type InsightSegment } from "../../services/api";
 import { ErrorPanel, ToggleGroup } from "./InsightControls";
+import { useInsightAsOf } from "./InsightAsOf";
 import { formatCount, formatDate, formatGroupLabel, formatUGX, formatUGXCompact, SEGMENT_OPTIONS } from "./insightFormat";
 import AccountProfileDetail from "./AccountProfileDetail";
 
@@ -177,10 +178,11 @@ const AccountProfiles = () => {
   const [sort, setSort] = useState<SortKey>("balance");
   const [direction, setDirection] = useState<"asc" | "desc">("desc");
   const [selectedAccount, setSelectedAccount] = useState<string | null>(null);
+  const { asOf } = useInsightAsOf();
 
-  // The page belongs to one set of filters: when they change it falls back to 1 in the
-  // same render (an effect would first fetch the old page number under the new filters)
-  const listKey = JSON.stringify([search, filters, sort, direction]);
+  // The page belongs to one set of filters (and as-at date): when they change it falls back to 1
+  // in the same render (an effect would first fetch the old page number under the new filters)
+  const listKey = JSON.stringify([search, filters, sort, direction, asOf]);
   const [pageState, setPageState] = useState({ listKey, page: 1 });
   const page = pageState.listKey === listKey ? pageState.page : 1;
   const setPage = (next: number | ((current: number) => number)) =>
@@ -205,8 +207,8 @@ const AccountProfiles = () => {
   }, [search, filters, sort, direction, page]);
 
   const { data, error, isPending, isFetching, refetch } = useQuery<DirectoryPage>({
-    queryKey: ["account-profiles", query],
-    queryFn: ({ signal }) => fetchAccountProfiles(query, signal),
+    queryKey: ["account-profiles", query, asOf],
+    queryFn: ({ signal }) => fetchAccountProfiles(query, signal, asOf),
     placeholderData: keepPreviousData,
     staleTime: 60 * 1000,
   });
@@ -218,11 +220,11 @@ const AccountProfiles = () => {
     if (!data || page >= totalPages) return;
     const next = { ...query, page: page + 1 };
     queryClient.prefetchQuery({
-      queryKey: ["account-profiles", next],
-      queryFn: ({ signal }) => fetchAccountProfiles(next, signal),
+      queryKey: ["account-profiles", next, asOf],
+      queryFn: ({ signal }) => fetchAccountProfiles(next, signal, asOf),
       staleTime: 60 * 1000,
     });
-  }, [data, page, totalPages, query, queryClient]);
+  }, [data, page, totalPages, query, queryClient, asOf]);
 
   const updateFilter = <K extends keyof DirectoryFilters>(key: K, value: DirectoryFilters[K]) =>
     setFilters((prev) => ({ ...prev, [key]: value }));
@@ -264,7 +266,7 @@ const AccountProfiles = () => {
           </div>
           <ToggleGroup options={SEGMENT_OPTIONS} value={filters.segment} onChange={(v) => updateFilter("segment", v)} />
           <a
-            href={accountProfilesExportUrl(query)}
+            href={accountProfilesExportUrl(query, asOf)}
             className="inline-flex items-center gap-2 px-4 py-2 text-sm bg-blue-600 text-white rounded-lg hover:bg-blue-700"
           >
             <Download className="w-4 h-4" />

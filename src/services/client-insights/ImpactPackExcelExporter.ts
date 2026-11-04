@@ -66,6 +66,7 @@ function writeReadMeSheet(sheet: ExcelJS.Worksheet, pack: ImpactPack): void {
   sheet.getColumn(2).width = 110;
   sheet.addRow(['XENO Impact & Inclusion data pack']).font = { bold: true, size: 14 };
   sheet.addRow(['Generated', pack.generatedAt.slice(0, 10)]);
+  sheet.addRow(['As at', pack.asOf.snapshot ?? 'Latest (all data in the system)']).font = { bold: true };
   sheet.addRow(['Transactions complete to', pack.asOf.transactions]);
   sheet.addRow(['Balances valued at prices of', pack.asOf.prices]);
   sheet.addRow(['Ultima goal statistics as of', pack.asOf.ultimaGoalSnapshot ?? 'n/a']);

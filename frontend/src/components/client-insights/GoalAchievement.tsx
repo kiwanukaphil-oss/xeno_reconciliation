@@ -3,6 +3,7 @@ import { useQuery } from "@tanstack/react-query";
 import { Info } from "lucide-react";
 import { fetchGoalAchievement, type InsightSegment } from "../../services/api";
 import { ErrorPanel, LoadingPanel, ShareBar, StatTile, ToggleGroup } from "./InsightControls";
+import { useInsightAsOf } from "./InsightAsOf";
 import { formatCount, formatDate, formatGroupLabel, formatPct, formatUGX, formatUGXCompact, SEGMENT_OPTIONS } from "./insightFormat";
 
 interface AchievementRow {
@@ -25,7 +26,8 @@ interface CountRow {
 }
 
 interface GoalAchievementReport {
-  asOf: { ultimaSnapshot: string; transactions: string };
+  /** valueBasis: goal values from Ultima Goal Stats (Latest) or from the system's transactions (past dates). */
+  asOf: { snapshot: string | null; ultimaSnapshot: string; transactions: string; valueBasis: "ULTIMA" | "SYSTEM" };
   headline: {
     goals: number;
     goalsWithTarget: number;
@@ -120,9 +122,11 @@ const GoalAchievement = () => {
   const [segment, setSegment] = useState<InsightSegment>("INDIVIDUAL");
   const [dimension, setDimension] = useState("targetSize");
 
+  const { asOf } = useInsightAsOf();
+
   const { data: report, error, isPending, refetch } = useQuery<GoalAchievementReport>({
-    queryKey: ["goal-achievement", segment],
-    queryFn: () => fetchGoalAchievement(segment),
+    queryKey: ["goal-achievement", segment, asOf],
+    queryFn: () => fetchGoalAchievement(segment, asOf),
   });
 
   if (isPending) return <LoadingPanel message="Working out goal achievement..." />;
@@ -140,7 +144,9 @@ const GoalAchievement = () => {
       <div className="flex flex-wrap items-center justify-between gap-3">
         <ToggleGroup options={SEGMENT_OPTIONS} value={segment} onChange={setSegment} />
         <p className="text-sm text-gray-600">
-          Ultima goal statistics of {formatDate(report.asOf.ultimaSnapshot)} · transactions to {formatDate(report.asOf.transactions)}
+          {report.asOf.valueBasis === "SYSTEM"
+            ? `Goal values from transactions to ${formatDate(report.asOf.transactions)} · targets from Ultima goal statistics of ${formatDate(report.asOf.ultimaSnapshot)}`
+            : `Ultima goal statistics of ${formatDate(report.asOf.ultimaSnapshot)} · transactions to ${formatDate(report.asOf.transactions)}`}
         </p>
       </div>
 

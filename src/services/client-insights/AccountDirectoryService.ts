@@ -3,6 +3,7 @@ import ExcelJS from 'exceljs';
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/database';
 import { InsightSegment } from './ClientInsightsService';
+import { InsightSources, LATEST_SOURCES } from './InsightSources';
 
 export type DirectoryFundedFilter = 'FUNDED' | 'UNFUNDED' | 'ALL';
 export type DirectoryMissingFilter = 'ANY' | 'GENDER' | 'DATE_OF_BIRTH' | 'LOCATION' | 'NO_PROFILE';
@@ -29,6 +30,7 @@ export interface AccountDirectoryPage {
   direction: 'asc' | 'desc';
   totalAccounts: number;
   totalAum: number;
+  asOf: string | null;
   rows: AccountDirectoryRow[];
 }
 
@@ -114,7 +116,8 @@ const ROW_COLUMNS = Prisma.raw(`
 export class AccountDirectoryService {
   static async listAccounts(
     filters: AccountDirectoryFilters,
-    options: { page: number; pageSize: number; sort: DirectorySort; direction: 'asc' | 'desc' }
+    options: { page: number; pageSize: number; sort: DirectorySort; direction: 'asc' | 'desc' },
+    sources: InsightSources = LATEST_SOURCES
   ): Promise<AccountDirectoryPage> {
     const where = this.buildWhere(filters);
     const pageSize = Math.min(Math.max(options.pageSize, 1), MAX_PAGE_SIZE);
@@ -129,7 +132,7 @@ export class AccountDirectoryService {
       prisma.$queryRaw<any[]>`
         WITH page AS (
           SELECT ${ROW_COLUMNS}
-          FROM account_profile_aum v ${pageJoin}
+          FROM ${sources.accounts('v')} ${pageJoin}
           WHERE ${where}
           ORDER BY ${order}
           LIMIT ${pageSize} OFFSET ${(page - 1) * pageSize}
@@ -139,7 +142,7 @@ export class AccountDirectoryService {
         ORDER BY ${pageOrder}`,
       prisma.$queryRaw<any[]>`
         SELECT COUNT(*)::int AS accounts, COALESCE(SUM(v.aum), 0)::float8 AS aum
-        FROM account_profile_aum v
+        FROM ${sources.accounts('v')}
         WHERE ${where}`,
     ]);
 
@@ -150,15 +153,17 @@ export class AccountDirectoryService {
       direction: options.direction,
       totalAccounts: totals.accounts,
       totalAum: totals.aum,
+      asOf: sources.asOf,
       rows: rows.map(toDirectoryRow),
     };
   }
 
   /**
    * One account's full profile, plus each goal's value, fund mix against the Ultima
-   * target and the latest Ultima goal snapshot. Returns null if the account is unknown.
+   * target and the latest Ultima goal snapshot. Returns null if the account is unknown (or, for a
+   * past as-at date, had no transactions yet).
    */
-  static async getAccountDetail(accountNumber: string) {
+  static async getAccountDetail(accountNumber: string, sources: InsightSources = LATEST_SOURCES) {
     const [account] = await prisma.$queryRaw<any[]>`
       SELECT ${ROW_COLUMNS}, c."clientName" AS client_name, c."clientCode" AS client_code,
              v.date_of_birth::text AS date_of_birth, v.equity_value::float8 AS equity_value,
@@ -168,7 +173,7 @@ export class AccountDirectoryService {
              v.signup_platform, v.portal_enabled, v.user_joined_at::text AS user_joined_at, v.avg_risk_score::float8 AS avg_risk_score,
              ap."districtRaw" AS district_raw, ap."sponsorAccountNumber" AS sponsor_account_number,
              ap."institutionName" AS institution_name, ap."enrollmentStatus" AS enrollment_status
-      FROM account_profile_aum v
+      FROM ${sources.accounts('v')}
       JOIN clients c ON c.id = v.client_id
       LEFT JOIN account_profiles ap ON ap."accountId" = v.account_id
       WHERE v.account_number = ${accountNumber}`;
@@ -183,7 +188,7 @@ export class AccountDirectoryService {
              gh.target_xudef_pct::float8 AS target_xudef_pct, gh.target_xuref_pct::float8 AS target_xuref_pct,
              gh.equity_gap_pp::float8 AS equity_gap_pp,
              s."goalTarget"::float8 AS ultima_target, s."currentValue"::float8 AS ultima_value, s."asOfDate"::text AS ultima_as_of
-      FROM goal_holdings gh
+      FROM ${sources.goalHoldings('gh')}
       JOIN goals g ON g.id = gh.goal_id
       LEFT JOIN LATERAL (
         SELECT "goalTarget", "currentValue", "asOfDate" FROM ultima_goal_snapshots
@@ -194,6 +199,7 @@ export class AccountDirectoryService {
 
     return {
       ...toDirectoryRow(account),
+      asOf: sources.asOf,
       clientCode: account.client_code,
       dateOfBirth: account.date_of_birth,
       districtRaw: account.district_raw,
@@ -236,9 +242,14 @@ export class AccountDirectoryService {
    * Streams every matching account to an Excel workbook, largest balance first.
    * Rows are read in batches by keyset on (balance, account id), so memory stays flat
    * and late batches cost the same as early ones. Stops early if the client
-   * disconnects. Returns the number of rows written.
+   * disconnects. An "About" sheet records the as-at date and filters. Returns the number of rows written.
    */
-  static async streamAccountsWorkbook(filters: AccountDirectoryFilters, output: Writable, isCancelled: () => boolean): Promise<number> {
+  static async streamAccountsWorkbook(
+    filters: AccountDirectoryFilters,
+    output: Writable,
+    isCancelled: () => boolean,
+    sources: InsightSources = LATEST_SOURCES
+  ): Promise<number> {
     const workbook = new ExcelJS.stream.xlsx.WorkbookWriter({ stream: output, useStyles: true });
     const sheet = workbook.addWorksheet('Accounts', { views: [{ state: 'frozen', ySplit: 1 }] });
     sheet.columns = [
@@ -276,7 +287,7 @@ export class AccountDirectoryService {
       const batch = await prisma.$queryRaw<any[]>`
         WITH page AS (
           SELECT ${ROW_COLUMNS}
-          FROM account_profile_aum v
+          FROM ${sources.accounts('v')}
           WHERE ${where} ${after}
           ORDER BY v.aum DESC, v.account_id DESC
           LIMIT ${Math.min(EXPORT_BATCH_SIZE, EXPORT_MAX_ROWS - written)}
@@ -305,6 +316,16 @@ export class AccountDirectoryService {
     }
 
     sheet.commit();
+    const about = workbook.addWorksheet('About');
+    about.getColumn(1).width = 22;
+    about.getColumn(2).width = 60;
+    about.addRow(['Account profiles export']).commit();
+    about.addRow(['As at', sources.asOf ?? 'Latest (all data in the system)']).commit();
+    about.addRow(['Generated', new Date().toISOString().slice(0, 10)]).commit();
+    about.addRow(['Filters', JSON.stringify(filters)]).commit();
+    about.addRow(['Rows', written]).commit();
+    about.addRow(['Note', 'Balances and activity are as at the date above; profile fields (gender, location, channel) are current Ultima values.']).commit();
+    about.commit();
     await workbook.commit();
     return written;
   }

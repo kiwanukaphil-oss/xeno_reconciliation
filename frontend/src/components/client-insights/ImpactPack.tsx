@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { Download, Info, Loader2 } from "lucide-react";
 import { downloadImpactPack, fetchImpactPack } from "../../services/api";
 import { formatCount, formatDate, formatGroupLabel, formatPct, formatUGX, saveBlob } from "./insightFormat";
+import { useInsightAsOf } from "./InsightAsOf";
 
 type PackQuestion = "Q1" | "Q2" | "Q3";
 type PackColumnFormat = "text" | "int" | "ugx" | "pct";
@@ -78,28 +79,37 @@ const ImpactPack = () => {
   const [downloading, setDownloading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadPack();
-  }, []);
+  const { asOf } = useInsightAsOf();
 
-  const loadPack = async () => {
+  useEffect(() => {
+    let active = true;
+    loadPack(() => active);
+    // A slower, older request (e.g. a date still being prepared) must not overwrite a newer pack
+    return () => {
+      active = false;
+    };
+  }, [asOf]);
+
+  const loadPack = async (isActive: () => boolean = () => true) => {
     try {
       setLoading(true);
       setError(null);
-      setPack(await fetchImpactPack());
+      const result = await fetchImpactPack(asOf);
+      if (isActive()) setPack(result);
     } catch (err: any) {
       console.error("Failed to load impact pack:", err);
-      setError(err.message || "Failed to load impact pack");
+      if (isActive()) setError(err.message || "Failed to load impact pack");
     } finally {
-      setLoading(false);
+      if (isActive()) setLoading(false);
     }
   };
 
   const handleDownload = async () => {
     try {
       setDownloading(true);
-      const blob = await downloadImpactPack();
-      saveBlob(blob, `xeno-impact-pack-${pack?.asOf.transactions ?? "latest"}.xlsx`);
+      const blob = await downloadImpactPack(asOf);
+      const fileDate = asOf ? `as-at-${asOf}` : pack?.asOf.transactions ?? "latest";
+      saveBlob(blob, `xeno-impact-pack-${fileDate}.xlsx`);
     } catch (err: any) {
       setError(err.message || "Failed to download impact pack");
     } finally {
@@ -121,7 +131,7 @@ const ImpactPack = () => {
       <div className="p-6">
         <div className="bg-red-50 border border-red-200 rounded-lg p-4">
           <p className="text-red-800">{error}</p>
-          <button onClick={loadPack} className="mt-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">
+          <button onClick={() => loadPack()} className="mt-2 px-4 py-2 bg-red-600 text-white rounded hover:bg-red-700">
             Retry
           </button>
         </div>

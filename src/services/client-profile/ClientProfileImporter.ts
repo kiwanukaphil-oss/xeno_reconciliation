@@ -14,6 +14,7 @@ import {
   resolveLocation,
 } from './ProfileFieldNormalizer';
 import { UGANDA_DISTRICTS_BY_REGION } from './ugandaDistricts';
+import { SignupCountCollector } from './SignupCountCollector';
 
 const WRITE_BATCH_SIZE = 1000;
 
@@ -59,6 +60,8 @@ export interface ClientProfileImportReport {
     snapshotAsOfDates: string[];
     targetsFromUltima: number;
   };
+  /** Sign-up counts per month and channel (all export rows, not just accounts in the system). */
+  signups: { accountsCounted: number; monthsWritten: string[] };
   distributions: Record<string, Record<string, number>>;
   unmatchedDistrictValues: Array<{ value: string; accounts: number }>;
 }
@@ -93,6 +96,7 @@ export class ClientProfileImporter {
     const snapshots = new Map<string, GoalSnapshotDraft>();
     const report = createEmptyReport(filePaths, options.dryRun, accountIdByNumber.size, goalTypeByNumber.size);
     const unmatchedDistricts = new Map<string, number>();
+    const signups = new SignupCountCollector();
 
     for (const filePath of [...filePaths].sort()) {
       logger.info(`Reading Ultima export: ${path.basename(filePath)}`);
@@ -101,6 +105,7 @@ export class ClientProfileImporter {
         if (sheet === 'CLIENT_ACCOUNTS') {
           report.rowsRead.clientAccounts++;
           collectAccountProfile(row, filePath, accountIdByNumber, profiles, report, unmatchedDistricts);
+          signups.add(row);
         } else if (sheet === 'GOAL_DATA') {
           report.rowsRead.goalData++;
           collectGoalEnrichment(row, goalTypeByNumber, goals);
@@ -123,6 +128,10 @@ export class ClientProfileImporter {
       await writeGoalSnapshots([...snapshots.values()]);
       await writeGoalTargetsFromLatestSnapshot([...snapshots.values()]);
     }
+    report.signups = {
+      accountsCounted: signups.accountsCounted,
+      monthsWritten: options.dryRun ? [] : await signups.write(),
+    };
     return report;
   }
 }
@@ -150,6 +159,7 @@ function createEmptyReport(files: string[], dryRun: boolean, accountsInSystem: n
       snapshotAsOfDates: [],
       targetsFromUltima: 0,
     },
+    signups: { accountsCounted: 0, monthsWritten: [] },
     distributions: {},
     unmatchedDistrictValues: [],
   };

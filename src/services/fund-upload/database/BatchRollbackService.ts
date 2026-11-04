@@ -1,6 +1,7 @@
 import { prisma } from '../../../config/database';
 import { logger } from '../../../config/logger';
 import { MaterializedViewService } from '../../unit-registry/MaterializedViewService';
+import { InsightSnapshotService } from '../../client-insights/InsightSnapshotService';
 
 /**
  * Service for rolling back upload batches
@@ -37,6 +38,12 @@ export class BatchRollbackService {
       }
 
       logger.info(`Batch ${batch.batchNumber} - Status: ${batch.processingStatus}`);
+
+      // Earliest transaction date in the batch, read before deletion, to mark later as-at snapshots stale
+      const earliestTransaction = await prisma.fundTransaction.aggregate({
+        where: { uploadBatchId: batchId },
+        _min: { transactionDate: true },
+      });
 
       const deletedCounts = {
         fundTransactions: 0,
@@ -149,6 +156,15 @@ export class BatchRollbackService {
       } catch (error: any) {
         logger.error('Failed to refresh materialized views:', error);
         // Don't fail the rollback if view refresh fails
+      }
+
+      const earliestDate = earliestTransaction._min.transactionDate;
+      if (earliestDate) {
+        try {
+          await InsightSnapshotService.markStaleFrom(earliestDate.toISOString().slice(0, 10), `rollback of batch ${batch.batchNumber}`);
+        } catch (error: any) {
+          logger.error(`Failed to mark insight snapshots stale after rollback: ${error.message}`);
+        }
       }
 
       const message = `Batch ${batch.batchNumber} rolled back successfully. ` +

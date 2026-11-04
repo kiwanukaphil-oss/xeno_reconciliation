@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/database';
 import { GenderEstimator } from '../client-profile/GenderEstimator';
+import { InsightSources, LATEST_SOURCES } from './InsightSources';
 
 export type InsightSegment = 'INDIVIDUAL' | 'INSTITUTIONAL' | 'ALL';
 /** DECLARED = Ultima gender only; ESTIMATED = declared, else the confident name-based estimate. */
@@ -119,7 +120,7 @@ export class ClientInsightsService {
    * breakdown follows genderBasis; the probability-weighted female share and the
    * estimator's measured accuracy are always included for disclosure.
    */
-  static async getSummary(segment: InsightSegment, genderBasis: GenderBasis = 'ESTIMATED') {
+  static async getSummary(segment: InsightSegment, genderBasis: GenderBasis = 'ESTIMATED', sources: InsightSources = LATEST_SOURCES) {
     const where = this.segmentCondition(segment);
     const genderColumn = Prisma.raw(this.genderColumn(genderBasis));
     const [kpi] = await prisma.$queryRaw<any[]>`
@@ -133,18 +134,18 @@ export class ClientInsightsService {
              COUNT(*) FILTER (WHERE gender_basis = 'ESTIMATED')::int AS gender_estimated,
              MIN(price_as_of)::text AS price_as_of,
              MIN(data_as_of)::text AS data_as_of
-      FROM account_profile_aum
+      FROM ${sources.accounts()}
       WHERE is_funded AND ${where}`;
 
     const [breakdowns, weightedGender, estimateRun] = await Promise.all([
-      Promise.all(DIMENSIONS.map((d) => this.getBreakdown(d, segment, genderBasis))),
-      this.getWeightedGenderSplit(segment),
+      Promise.all(DIMENSIONS.map((d) => this.getBreakdown(d, segment, genderBasis, sources))),
+      this.getWeightedGenderSplit(segment, sources),
       GenderEstimator.getLatestRun(),
     ]);
     return {
       segment,
       genderBasis,
-      asOf: { prices: kpi.price_as_of, transactions: kpi.data_as_of },
+      asOf: { snapshot: sources.asOf, prices: kpi.price_as_of, transactions: kpi.data_as_of },
       kpis: {
         fundedAccounts: kpi.accounts,
         aum: kpi.aum,
@@ -161,10 +162,15 @@ export class ClientInsightsService {
     };
   }
 
-  static async getBreakdownByName(dimension: string, segment: InsightSegment, genderBasis: GenderBasis = 'ESTIMATED'): Promise<Breakdown> {
+  static async getBreakdownByName(
+    dimension: string,
+    segment: InsightSegment,
+    genderBasis: GenderBasis = 'ESTIMATED',
+    sources: InsightSources = LATEST_SOURCES
+  ): Promise<Breakdown> {
     const definition = DIMENSIONS.find((d) => d.dimension === dimension);
     if (!definition) throw new Error(`Unknown dimension: ${dimension}`);
-    return this.getBreakdown(definition, segment, genderBasis);
+    return this.getBreakdown(definition, segment, genderBasis, sources);
   }
 
   /** View column holding gender for the chosen basis. */
@@ -179,7 +185,7 @@ export class ClientInsightsService {
    * the known split up to the unknowns. Accounts that cannot be estimated ("rather
    * not say", no usable name, institutions) are reported separately, not allocated.
    */
-  static async getWeightedGenderSplit(segment: InsightSegment): Promise<WeightedGenderSplit> {
+  static async getWeightedGenderSplit(segment: InsightSegment, sources: InsightSources = LATEST_SOURCES): Promise<WeightedGenderSplit> {
     const [r] = await prisma.$queryRaw<any[]>`
       SELECT COALESCE(SUM(female_probability), 0)::float8 AS female_accounts,
              COALESCE(SUM(1 - female_probability), 0)::float8 AS male_accounts,
@@ -191,7 +197,7 @@ export class ClientInsightsService {
              COUNT(*) FILTER (WHERE gender_basis = 'ESTIMATED')::int AS estimated_label,
              COUNT(*) FILTER (WHERE gender_basis = 'UNKNOWN' AND female_probability IS NOT NULL)::int AS probability_only,
              COUNT(*)::int AS total
-      FROM account_profile_aum
+      FROM ${sources.accounts()}
       WHERE is_funded AND ${this.segmentCondition(segment)}`;
     const estimableAccounts = r.female_accounts + r.male_accounts;
     const estimableAum = r.female_aum + r.male_aum;
@@ -218,7 +224,12 @@ export class ClientInsightsService {
    * groups beyond topN, are folded into one "other" row (whose median is not shown,
    * as it cannot be derived from the parts). Rows are sorted by AUM with UNKNOWN last.
    */
-  private static async getBreakdown(definition: DimensionDefinition, segment: InsightSegment, genderBasis: GenderBasis): Promise<Breakdown> {
+  private static async getBreakdown(
+    definition: DimensionDefinition,
+    segment: InsightSegment,
+    genderBasis: GenderBasis,
+    sources: InsightSources
+  ): Promise<Breakdown> {
     const extra = definition.extraWhere ? Prisma.raw(`AND ${definition.extraWhere}`) : Prisma.empty;
     const expression = definition.dimension === 'gender' ? this.genderColumn(genderBasis) : definition.expression;
     const raw = await prisma.$queryRaw<any[]>`
@@ -227,7 +238,7 @@ export class ClientInsightsService {
              COALESCE(SUM(aum), 0)::float8 AS aum,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY aum)::float8 AS median_balance,
              AVG(aum)::float8 AS average_balance
-      FROM account_profile_aum
+      FROM ${sources.accounts()}
       WHERE is_funded AND ${this.segmentCondition(segment)} ${extra}
       GROUP BY 1`;
 
@@ -278,7 +289,7 @@ export class ClientInsightsService {
    * field completeness, operational flags, the largest accounts missing data, and
    * district text that could not be matched (to extend the lookup lists).
    */
-  static async getDataQuality(segment: InsightSegment, limit: number) {
+  static async getDataQuality(segment: InsightSegment, limit: number, sources: InsightSources = LATEST_SOURCES) {
     const where = this.segmentCondition(segment);
     const [c] = await prisma.$queryRaw<any[]>`
       SELECT COUNT(*)::int AS accounts, COALESCE(SUM(aum), 0)::float8 AS aum,
@@ -298,7 +309,7 @@ export class ClientInsightsService {
         COALESCE(SUM(aum) FILTER (WHERE contact_closed), 0)::float8 AS closed_aum,
         COUNT(*) FILTER (WHERE portal_enabled = false)::int AS disabled_n,
         COALESCE(SUM(aum) FILTER (WHERE portal_enabled = false), 0)::float8 AS disabled_aum
-      FROM account_profile_aum WHERE is_funded AND ${where}`;
+      FROM ${sources.accounts()} WHERE is_funded AND ${where}`;
 
     const field = (name: string, n: number, aum: number) => ({
       field: name,
@@ -314,7 +325,7 @@ export class ClientInsightsService {
                CASE WHEN date_of_birth IS NULL THEN 'date of birth' END,
                CASE WHEN location_group = 'UNKNOWN' THEN 'location' END
              ], NULL) AS missing
-      FROM account_profile_aum
+      FROM ${sources.accounts()}
       WHERE is_funded AND ${where}
         AND (gender = 'UNKNOWN' OR date_of_birth IS NULL OR location_group = 'UNKNOWN')
       ORDER BY aum DESC
@@ -327,6 +338,7 @@ export class ClientInsightsService {
 
     return {
       segment,
+      asOf: sources.asOf,
       fundedAccounts: c.accounts,
       aum: c.aum,
       completeness: [

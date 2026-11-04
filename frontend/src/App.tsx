@@ -49,6 +49,19 @@ import GoalAchievement from "./components/client-insights/GoalAchievement";
 import ImpactPack from "./components/client-insights/ImpactPack";
 import RiskAllocation from "./components/client-insights/RiskAllocation";
 import GroupSchemes from "./components/client-insights/GroupSchemes";
+import UgMonthlyMetrics from "./components/reporting/UgMonthlyMetrics";
+import { InsightAsOfBar, InsightAsOfProvider } from "./components/client-insights/InsightAsOf";
+
+// Pages built on Client Insights data: they share the "as at" date bar
+const INSIGHT_MODULES = new Set([
+  "client-insights",
+  "risk-allocation",
+  "goal-achievement",
+  "group-schemes",
+  "impact-pack",
+  "account-profiles",
+  "profile-data-quality",
+]);
 
 interface MenuItem {
   id: string;
@@ -74,7 +87,7 @@ const App = () => {
   const [activeModule, setActiveModule] = useState("dashboard");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [expandedGroups, setExpandedGroups] = useState<Set<string>>(
-    new Set(["uploads", "transactions", "reconciliation", "clients-holdings", "client-insights-group"])
+    new Set(["uploads", "transactions", "reconciliation", "clients-holdings", "client-insights-group", "reporting"])
   );
 
   const menuStructure: MenuEntry[] = [
@@ -221,6 +234,19 @@ const App = () => {
         },
       ],
     },
+    {
+      id: "reporting",
+      name: "Reporting",
+      icon: BarChart3,
+      items: [
+        {
+          id: "ug-monthly-metrics",
+          name: "Monthly Metrics (UG)",
+          icon: FileSpreadsheet,
+          description: "Inputs-UG of the monthly XENO_Metrics report, computed from the system",
+        },
+      ],
+    },
   ];
 
   const toggleGroup = (groupId: string) => {
@@ -273,6 +299,8 @@ const App = () => {
         return <ProfileDataQuality />;
       case "impact-pack":
         return <ImpactPack />;
+      case "ug-monthly-metrics":
+        return <UgMonthlyMetrics />;
       default:
         return <Dashboard />;
     }
@@ -364,6 +392,7 @@ const App = () => {
 
   return (
     <QueryClientProvider client={queryClient}>
+      <InsightAsOfProvider>
       <div className="min-h-screen bg-gray-50 flex">
         {/* Sidebar */}
         <div
@@ -458,9 +487,17 @@ const App = () => {
           </header>
 
           {/* Module Content */}
-          <main className="flex-1 overflow-y-auto">{renderActiveModule()}</main>
+          <main className="flex-1 overflow-y-auto">
+            {INSIGHT_MODULES.has(activeModule) && (
+              <div className="px-6 pt-6">
+                <InsightAsOfBar />
+              </div>
+            )}
+            {renderActiveModule()}
+          </main>
         </div>
       </div>
+      </InsightAsOfProvider>
       <ReactQueryDevtools initialIsOpen={false} position="bottom" />
     </QueryClientProvider>
   );

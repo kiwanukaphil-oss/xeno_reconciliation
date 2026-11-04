@@ -1,11 +1,13 @@
 import { NextFunction, Request, Response, Router } from 'express';
-import { BadRequestError, NotFoundError } from '../errors';
+import { BadRequestError, ConflictError, NotFoundError } from '../errors';
 import { ClientInsightsService, GenderBasis, InsightSegment } from '../services/client-insights/ClientInsightsService';
 import { ImpactPackService } from '../services/client-insights/ImpactPackService';
 import { GoalRiskService } from '../services/client-insights/GoalRiskService';
 import { GroupSchemeService } from '../services/client-insights/GroupSchemeService';
 import { GoalAchievementService } from '../services/client-insights/GoalAchievementService';
 import { writeImpactPackWorkbook } from '../services/client-insights/ImpactPackExcelExporter';
+import { InsightSnapshotService } from '../services/client-insights/InsightSnapshotService';
+import { InsightSources } from '../services/client-insights/InsightSources';
 import {
   AccountDirectoryFilters,
   AccountDirectoryService,
@@ -29,6 +31,29 @@ function readLimit(req: Request, fallback: number): number {
   return Math.min(Math.max(parseInt(String(req.query.limit ?? fallback), 10) || fallback, 1), 500);
 }
 
+/**
+ * Resolves the optional ?asOf=YYYY-MM-DD (omitted or "latest" = Latest). When that date's snapshot is
+ * ready the handler runs against it; otherwise a build is started and 202 is returned with its status,
+ * so the page can show "preparing" and poll GET /snapshots/:asOf.
+ */
+async function respondAsOf(req: Request, res: Response, produce: (sources: InsightSources) => Promise<unknown>): Promise<void> {
+  const resolution = await InsightSnapshotService.resolveAsOf(req.query.asOf);
+  if (!resolution.ready) {
+    res.status(202).json({ preparing: true, snapshot: resolution.snapshot });
+    return;
+  }
+  res.json(await produce(resolution.sources));
+}
+
+/** Like respondAsOf for file downloads, which cannot wait: a snapshot that is not ready is a 409. */
+async function readyAsOfSources(req: Request): Promise<InsightSources> {
+  const resolution = await InsightSnapshotService.resolveAsOf(req.query.asOf);
+  if (!resolution.ready) {
+    throw new ConflictError(`Figures as at ${resolution.snapshot.asOf} are still being prepared; try again in a minute`);
+  }
+  return resolution.sources;
+}
+
 function readGenderBasis(req: Request): GenderBasis {
   const basis = String(req.query.genderBasis ?? 'ESTIMATED').toUpperCase();
   if (basis !== 'ESTIMATED' && basis !== 'DECLARED') throw new BadRequestError('genderBasis must be ESTIMATED or DECLARED');
@@ -41,7 +66,7 @@ function readGenderBasis(req: Request): GenderBasis {
  */
 router.get('/summary', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await ClientInsightsService.getSummary(readSegment(req), readGenderBasis(req)));
+    await respondAsOf(req, res, (sources) => ClientInsightsService.getSummary(readSegment(req), readGenderBasis(req), sources));
   } catch (error) {
     next(error);
   }
@@ -53,7 +78,7 @@ router.get('/summary', async (req: Request, res: Response, next: NextFunction) =
  */
 router.get('/data-quality', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await ClientInsightsService.getDataQuality(readSegment(req), readLimit(req, 50)));
+    await respondAsOf(req, res, (sources) => ClientInsightsService.getDataQuality(readSegment(req), readLimit(req, 50), sources));
   } catch (error) {
     next(error);
   }
@@ -65,7 +90,7 @@ router.get('/data-quality', async (req: Request, res: Response, next: NextFuncti
  */
 router.get('/risk-allocation', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await GoalRiskService.getRiskAllocation(readSegment(req), readLimit(req, 50)));
+    await respondAsOf(req, res, (sources) => GoalRiskService.getRiskAllocation(readSegment(req), readLimit(req, 50), sources));
   } catch (error) {
     next(error);
   }
@@ -77,7 +102,7 @@ router.get('/risk-allocation', async (req: Request, res: Response, next: NextFun
  */
 router.get('/suitability', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await GoalRiskService.getSuitabilityReview(readLimit(req, 50)));
+    await respondAsOf(req, res, (sources) => GoalRiskService.getSuitabilityReview(readLimit(req, 50), sources));
   } catch (error) {
     next(error);
   }
@@ -87,9 +112,9 @@ router.get('/suitability', async (req: Request, res: Response, next: NextFunctio
  * GET /api/client-insights/group-schemes
  * Member accounts rolled up by sponsor (SACCOs, clubs, schemes, family groups)
  */
-router.get('/group-schemes', async (_req: Request, res: Response, next: NextFunction) => {
+router.get('/group-schemes', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await GroupSchemeService.getGroupSchemes());
+    await respondAsOf(req, res, (sources) => GroupSchemeService.getGroupSchemes(sources));
   } catch (error) {
     next(error);
   }
@@ -101,7 +126,7 @@ router.get('/group-schemes', async (_req: Request, res: Response, next: NextFunc
  */
 router.get('/goal-achievement', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await GoalAchievementService.getReport(readSegment(req)));
+    await respondAsOf(req, res, (sources) => GoalAchievementService.getReport(readSegment(req), sources));
   } catch (error) {
     next(error);
   }
@@ -111,9 +136,9 @@ router.get('/goal-achievement', async (req: Request, res: Response, next: NextFu
  * GET /api/client-insights/impact-pack
  * Impact & Inclusion data pack (investor questions on profile, usage and outcomes)
  */
-router.get('/impact-pack', async (_req: Request, res: Response, next: NextFunction) => {
+router.get('/impact-pack', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    res.json(await ImpactPackService.buildPack());
+    await respondAsOf(req, res, (sources) => ImpactPackService.buildPack(sources));
   } catch (error) {
     next(error);
   }
@@ -123,12 +148,13 @@ router.get('/impact-pack', async (_req: Request, res: Response, next: NextFuncti
  * GET /api/client-insights/impact-pack/export
  * Same pack as an Excel workbook
  */
-router.get('/impact-pack/export', async (_req: Request, res: Response, next: NextFunction) => {
+router.get('/impact-pack/export', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const pack = await ImpactPackService.buildPack();
+    const pack = await ImpactPackService.buildPack(await readyAsOfSources(req));
     const buffer = await writeImpactPackWorkbook(pack);
+    const fileDate = pack.asOf.snapshot ? `as-at-${pack.asOf.snapshot}` : pack.asOf.transactions;
     res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-    res.setHeader('Content-Disposition', `attachment; filename="xeno-impact-pack-${pack.asOf.transactions}.xlsx"`);
+    res.setHeader('Content-Disposition', `attachment; filename="xeno-impact-pack-${fileDate}.xlsx"`);
     res.send(buffer);
   } catch (error) {
     next(error);
@@ -187,7 +213,8 @@ router.get('/accounts', async (req: Request, res: Response, next: NextFunction) 
     const direction = String(req.query.direction ?? 'desc').toLowerCase() === 'asc' ? 'asc' : 'desc';
     const page = parseInt(String(req.query.page ?? '1'), 10) || 1;
     const pageSize = Math.min(parseInt(String(req.query.pageSize ?? '50'), 10) || 50, MAX_PAGE_SIZE);
-    res.json(await AccountDirectoryService.listAccounts(readDirectoryFilters(req), { page, pageSize, sort, direction }));
+    const filters = readDirectoryFilters(req);
+    await respondAsOf(req, res, (sources) => AccountDirectoryService.listAccounts(filters, { page, pageSize, sort, direction }, sources));
   } catch (error) {
     next(error);
   }
@@ -199,8 +226,10 @@ router.get('/accounts', async (req: Request, res: Response, next: NextFunction) 
  */
 router.get('/accounts/export', async (req: Request, res: Response, next: NextFunction) => {
   let filters: AccountDirectoryFilters;
+  let sources: InsightSources;
   try {
     filters = readDirectoryFilters(req);
+    sources = await readyAsOfSources(req);
   } catch (error) {
     return next(error);
   }
@@ -209,9 +238,10 @@ router.get('/accounts/export', async (req: Request, res: Response, next: NextFun
     if (!res.writableFinished) cancelled = true;
   });
   res.setHeader('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
-  res.setHeader('Content-Disposition', `attachment; filename="xeno-account-profiles-${new Date().toISOString().slice(0, 10)}.xlsx"`);
+  const fileDate = sources.asOf ? `as-at-${sources.asOf}` : new Date().toISOString().slice(0, 10);
+  res.setHeader('Content-Disposition', `attachment; filename="xeno-account-profiles-${fileDate}.xlsx"`);
   try {
-    await AccountDirectoryService.streamAccountsWorkbook(filters, res, () => cancelled);
+    await AccountDirectoryService.streamAccountsWorkbook(filters, res, () => cancelled, sources);
   } catch (error) {
     // Headers are already sent once streaming starts, so the response can only be cut short
     if (!res.headersSent) return next(error);
@@ -225,9 +255,65 @@ router.get('/accounts/export', async (req: Request, res: Response, next: NextFun
  */
 router.get('/accounts/:accountNumber', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    const detail = await AccountDirectoryService.getAccountDetail(req.params.accountNumber);
-    if (!detail) throw new NotFoundError('Account', req.params.accountNumber);
-    res.json(detail);
+    await respondAsOf(req, res, async (sources) => {
+      const detail = await AccountDirectoryService.getAccountDetail(req.params.accountNumber, sources);
+      if (!detail) throw new NotFoundError('Account', req.params.accountNumber);
+      return detail;
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/client-insights/as-of-dates
+ * Dates the as-at selector offers (month-ends and any stored date) with each one's build status
+ */
+router.get('/as-of-dates', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    res.json(await InsightSnapshotService.listDates());
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/client-insights/snapshots/build-period-ends
+ * Builds every month-end snapshot that is not ready, one at a time in the background
+ */
+router.post('/snapshots/build-period-ends', async (_req: Request, res: Response, next: NextFunction) => {
+  try {
+    const { dates } = await InsightSnapshotService.listDates();
+    const pending = dates.filter((d) => d.isPeriodEnd && d.status !== 'READY').map((d) => d.asOf);
+    void InsightSnapshotService.buildMissingPeriodEnds();
+    res.status(202).json({ started: true, dates: pending });
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * GET /api/client-insights/snapshots/:asOf
+ * Build status of one as-at date (NOT_BUILT, BUILDING, READY, STALE or FAILED)
+ */
+router.get('/snapshots/:asOf', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await InsightSnapshotService.assertReportableDate(req.params.asOf);
+    res.json(await InsightSnapshotService.getSnapshot(req.params.asOf));
+  } catch (error) {
+    next(error);
+  }
+});
+
+/**
+ * POST /api/client-insights/snapshots/:asOf
+ * Prepares one as-at date in the background (no-op if it is already ready)
+ */
+router.post('/snapshots/:asOf', async (req: Request, res: Response, next: NextFunction) => {
+  try {
+    await InsightSnapshotService.assertReportableDate(req.params.asOf);
+    const snapshot = await InsightSnapshotService.requestBuild(req.params.asOf);
+    res.status(snapshot.status === 'READY' ? 200 : 202).json(snapshot);
   } catch (error) {
     next(error);
   }

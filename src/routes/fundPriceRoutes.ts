@@ -4,6 +4,7 @@ import path from 'path';
 import fs from 'fs';
 import { FundPriceService } from '../services/fund-price/FundPriceService';
 import { FundPriceParser } from '../services/fund-price/FundPriceParser';
+import { InsightSnapshotService } from '../services/client-insights/InsightSnapshotService';
 import { logger } from '../config/logger';
 
 const router = Router();
@@ -62,6 +63,15 @@ router.post('/upload', upload.single('file'), async (req: Request, res: Response
     fs.unlinkSync(req.file.path);
 
     logger.info(`Fund prices upload complete: ${result.inserted} inserted, ${result.updated} updated, ${result.failed} failed`);
+
+    // Client Insights "as at" snapshots value balances at that date's prices: those on or after
+    // the earliest uploaded price date are now out of date
+    if (result.inserted + result.updated > 0 && prices.length) {
+      const earliest = prices.reduce((min, p) => (p.priceDate < min ? p.priceDate : min), prices[0].priceDate);
+      InsightSnapshotService.markStaleFrom(earliest.toISOString().slice(0, 10), 'fund price upload').catch((error) =>
+        logger.error(`Failed to mark insight snapshots stale after price upload: ${error.message}`)
+      );
+    }
 
     return res.json({
       success: result.success,

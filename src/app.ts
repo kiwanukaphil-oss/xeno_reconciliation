@@ -17,6 +17,7 @@ import bankUploadRoutes from './routes/bankUploadRoutes';
 import goalComparisonRoutes from './routes/goalComparisonRoutes';
 import varianceResolutionRoutes from './routes/varianceResolutionRoutes';
 import clientInsightsRoutes from './routes/clientInsightsRoutes';
+import ugMetricsRoutes from './routes/ugMetricsRoutes';
 
 const app = express();
 
@@ -66,6 +67,7 @@ app.use('/api/bank-upload', bankUploadRoutes);
 app.use('/api/goal-comparison', goalComparisonRoutes);
 app.use('/api/variance-resolution', varianceResolutionRoutes);
 app.use('/api/client-insights', clientInsightsRoutes);
+app.use('/api/reports/ug-metrics', ugMetricsRoutes);
 
 // 404 handler
 app.use(notFoundHandler);

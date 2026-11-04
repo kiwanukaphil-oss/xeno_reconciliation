@@ -3,6 +3,7 @@ import { AlertTriangle, Info } from "lucide-react";
 import { fetchRiskAllocation, fetchSuitabilityReview, type InsightSegment } from "../../services/api";
 import { BreakdownBarList, type Breakdown } from "./BreakdownBarList";
 import { ErrorPanel, LoadingPanel, ShareBar, StatTile, ToggleGroup } from "./InsightControls";
+import { useInsightAsOf } from "./InsightAsOf";
 import {
   formatCount,
   formatGroupLabel,
@@ -106,22 +107,30 @@ const RiskAllocation = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadReport(segment);
-  }, [segment]);
+  const { asOf } = useInsightAsOf();
 
-  const loadReport = async (selected: InsightSegment) => {
+  useEffect(() => {
+    let active = true;
+    loadReport(segment, () => active);
+    // A slower, older request (e.g. a date still being prepared) must not overwrite newer figures
+    return () => {
+      active = false;
+    };
+  }, [segment, asOf]);
+
+  const loadReport = async (selected: InsightSegment, isActive: () => boolean = () => true) => {
     try {
       setLoading(true);
       setError(null);
-      const [risk, suitability] = await Promise.all([fetchRiskAllocation(selected, 50), fetchSuitabilityReview(25)]);
+      const [risk, suitability] = await Promise.all([fetchRiskAllocation(selected, 50, asOf), fetchSuitabilityReview(25, asOf)]);
+      if (!isActive()) return;
       setReport(risk);
       setReview(suitability);
     } catch (err: any) {
       console.error("Failed to load risk & allocation:", err);
-      setError(err.message || "Failed to load risk & allocation");
+      if (isActive()) setError(err.message || "Failed to load risk & allocation");
     } finally {
-      setLoading(false);
+      if (isActive()) setLoading(false);
     }
   };
 

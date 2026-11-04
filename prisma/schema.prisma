@@ -784,3 +784,29 @@ enum VarianceReviewTag {
   UNDER_INVESTIGATION     // Needs further investigation
   REVERSAL_NETTED         // Paired with a reversal transaction (net zero)
 }
+
+/// Ultima sign-ups per month and channel, counted from Client Data exports (counts only, no per-person data).
+/// newAccounts = accounts created in the month ("New Registered"); newUsers = people (phone numbers) who
+/// joined in the month, whose running total is "Registered".
+model UltimaSignupMonthlyCount {
+  month       DateTime @db.Date // first day of the month
+  channel     String   // WEB | ANDROID | IOS | MTN_USSD | AIRTEL_USSD | OTHER
+  newAccounts Int
+  newUsers    Int
+  importedAt  DateTime @default(now())
+
+  @@id([month, channel])
+  @@map("ultima_signup_monthly_counts")
+}
+
+/// Hand-entered figures for the monthly Inputs-UG report that the system has no source for
+/// (USD/UGX, financials, bank balances, visitors, autosaves). metricKey is the layout's stable key.
+model UgMetricManualInput {
+  month     DateTime @db.Date // first day of the month
+  metricKey String
+  value     Decimal  @db.Decimal(20, 4)
+  updatedAt DateTime @default(now())
+
+  @@id([month, metricKey])
+  @@map("ug_metric_manual_inputs")
+}

@@ -219,40 +219,108 @@ export type InsightSegment = "INDIVIDUAL" | "INSTITUTIONAL" | "ALL";
 
 export type GenderBasis = "ESTIMATED" | "DECLARED";
 
-export const fetchClientInsightsSummary = async (segment: InsightSegment, genderBasis: GenderBasis = "ESTIMATED") => {
-  const response = await fetch(`${API_URL}/api/client-insights/summary?segment=${segment}&genderBasis=${genderBasis}`);
+/** As-at date for Client Insights: YYYY-MM-DD, or null for Latest. */
+export type InsightAsOf = string | null;
+
+export type SnapshotStatus = "NOT_BUILT" | "BUILDING" | "READY" | "STALE" | "FAILED";
+
+export interface SnapshotDateInfo {
+  asOf: string;
+  status: SnapshotStatus;
+  isPeriodEnd: boolean;
+  builtAt: string | null;
+  buildMs: number | null;
+  accountRows: number | null;
+  priceAsOf: string | null;
+  error: string | null;
+}
+
+export interface InsightAsOfDates {
+  latest: { transactions: string; prices: string | null };
+  dates: SnapshotDateInfo[];
+}
+
+const SNAPSHOT_POLL_MS = 3000;
+const SNAPSHOT_MAX_WAIT_MS = 10 * 60 * 1000;
+
+// Pages report "preparing figures as at <date>" through these listeners (the date bar shows it)
+type PreparingListener = (asOf: string, preparing: boolean) => void;
+const preparingListeners = new Set<PreparingListener>();
+
+/** Subscribes to snapshot preparation start/finish; returns the unsubscribe function. */
+export const onInsightSnapshotPreparing = (listener: PreparingListener) => {
+  preparingListeners.add(listener);
+  return () => {
+    preparingListeners.delete(listener);
+  };
+};
+
+const notifyPreparing = (asOf: string, preparing: boolean) => preparingListeners.forEach((listener) => listener(asOf, preparing));
+
+/** Adds asOf to a Client Insights URL (nothing for Latest). */
+const withAsOf = (path: string, asOf: InsightAsOf) => {
+  if (!asOf) return `${API_URL}${path}`;
+  return `${API_URL}${path}${path.includes("?") ? "&" : "?"}asOf=${asOf}`;
+};
+
+const waitFor = (ms: number, signal?: AbortSignal) =>
+  new Promise<void>((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    signal?.addEventListener("abort", () => {
+      clearTimeout(timer);
+      reject(new DOMException("Aborted", "AbortError"));
+    });
+  });
+
+/**
+ * Fetches a Client Insights endpoint for an as-at date. If the server is still preparing that date
+ * (HTTP 202), waits until the snapshot is ready, telling listeners meanwhile, then fetches again.
+ */
+const fetchInsight = async (path: string, asOf: InsightAsOf, signal?: AbortSignal) => {
+  const url = withAsOf(path, asOf);
+  const first = await fetch(url, { signal });
+  if (first.status !== 202 || !asOf) return handleResponse(first);
+
+  notifyPreparing(asOf, true);
+  try {
+    const started = Date.now();
+    for (;;) {
+      await waitFor(SNAPSHOT_POLL_MS, signal);
+      const snapshot: SnapshotDateInfo = await handleResponse(await fetch(`${API_URL}/api/client-insights/snapshots/${asOf}`, { signal }));
+      if (snapshot.status === "READY") break;
+      if (snapshot.status === "FAILED") throw new Error(`Figures as at ${asOf} could not be prepared: ${snapshot.error ?? "unknown error"}`);
+      if (Date.now() - started > SNAPSHOT_MAX_WAIT_MS) throw new Error(`Figures as at ${asOf} are taking too long to prepare; try again later`);
+    }
+  } finally {
+    notifyPreparing(asOf, false);
+  }
+  return handleResponse(await fetch(url, { signal }));
+};
+
+/** Month-ends and stored dates the as-at selector offers, with each one's status. */
+export const fetchInsightAsOfDates = async (): Promise<InsightAsOfDates> => {
+  const response = await fetch(`${API_URL}/api/client-insights/as-of-dates`);
   return handleResponse(response);
 };
 
-export const fetchProfileDataQuality = async (segment: InsightSegment, limit = 50) => {
-  const response = await fetch(`${API_URL}/api/client-insights/data-quality?segment=${segment}&limit=${limit}`);
-  return handleResponse(response);
-};
+export const fetchClientInsightsSummary = async (segment: InsightSegment, genderBasis: GenderBasis = "ESTIMATED", asOf: InsightAsOf = null) =>
+  fetchInsight(`/api/client-insights/summary?segment=${segment}&genderBasis=${genderBasis}`, asOf);
 
-export const fetchRiskAllocation = async (segment: InsightSegment, limit = 50) => {
-  const response = await fetch(`${API_URL}/api/client-insights/risk-allocation?segment=${segment}&limit=${limit}`);
-  return handleResponse(response);
-};
+export const fetchProfileDataQuality = async (segment: InsightSegment, limit = 50, asOf: InsightAsOf = null) =>
+  fetchInsight(`/api/client-insights/data-quality?segment=${segment}&limit=${limit}`, asOf);
 
-export const fetchSuitabilityReview = async (limit = 50) => {
-  const response = await fetch(`${API_URL}/api/client-insights/suitability?limit=${limit}`);
-  return handleResponse(response);
-};
+export const fetchRiskAllocation = async (segment: InsightSegment, limit = 50, asOf: InsightAsOf = null) =>
+  fetchInsight(`/api/client-insights/risk-allocation?segment=${segment}&limit=${limit}`, asOf);
 
-export const fetchGroupSchemes = async () => {
-  const response = await fetch(`${API_URL}/api/client-insights/group-schemes`);
-  return handleResponse(response);
-};
+export const fetchSuitabilityReview = async (limit = 50, asOf: InsightAsOf = null) =>
+  fetchInsight(`/api/client-insights/suitability?limit=${limit}`, asOf);
 
-export const fetchImpactPack = async () => {
-  const response = await fetch(`${API_URL}/api/client-insights/impact-pack`);
-  return handleResponse(response);
-};
+export const fetchGroupSchemes = async (asOf: InsightAsOf = null) => fetchInsight(`/api/client-insights/group-schemes`, asOf);
 
-export const fetchGoalAchievement = async (segment: InsightSegment) => {
-  const response = await fetch(`${API_URL}/api/client-insights/goal-achievement?segment=${segment}`);
-  return handleResponse(response);
-};
+export const fetchImpactPack = async (asOf: InsightAsOf = null) => fetchInsight(`/api/client-insights/impact-pack`, asOf);
+
+export const fetchGoalAchievement = async (segment: InsightSegment, asOf: InsightAsOf = null) =>
+  fetchInsight(`/api/client-insights/goal-achievement?segment=${segment}`, asOf);
 
 export interface AccountDirectoryQuery {
   search?: string;
@@ -278,18 +346,14 @@ const buildAccountDirectoryParams = (query: AccountDirectoryQuery) => {
   return params.toString();
 };
 
-export const fetchAccountProfiles = async (query: AccountDirectoryQuery, signal?: AbortSignal) => {
-  const response = await fetch(`${API_URL}/api/client-insights/accounts?${buildAccountDirectoryParams(query)}`, { signal });
-  return handleResponse(response);
-};
+export const fetchAccountProfiles = async (query: AccountDirectoryQuery, signal?: AbortSignal, asOf: InsightAsOf = null) =>
+  fetchInsight(`/api/client-insights/accounts?${buildAccountDirectoryParams(query)}`, asOf, signal);
 
-export const fetchAccountProfileDetail = async (accountNumber: string, signal?: AbortSignal) => {
-  const response = await fetch(`${API_URL}/api/client-insights/accounts/${encodeURIComponent(accountNumber)}`, { signal });
-  return handleResponse(response);
-};
+export const fetchAccountProfileDetail = async (accountNumber: string, signal?: AbortSignal, asOf: InsightAsOf = null) =>
+  fetchInsight(`/api/client-insights/accounts/${encodeURIComponent(accountNumber)}`, asOf, signal);
 
 /** Export link: the browser downloads the streamed workbook straight to disk, without holding it in memory. */
-export const accountProfilesExportUrl = (query: AccountDirectoryQuery) => {
+export const accountProfilesExportUrl = (query: AccountDirectoryQuery, asOf: InsightAsOf = null) => {
   const filters: AccountDirectoryQuery = {
     search: query.search,
     segment: query.segment,
@@ -300,13 +364,81 @@ export const accountProfilesExportUrl = (query: AccountDirectoryQuery) => {
     missing: query.missing,
     minBalance: query.minBalance,
   };
-  return `${API_URL}/api/client-insights/accounts/export?${buildAccountDirectoryParams(filters)}`;
+  return withAsOf(`/api/client-insights/accounts/export?${buildAccountDirectoryParams(filters)}`, asOf);
 };
 
-export const downloadImpactPack = async () => {
-  const response = await fetch(`${API_URL}/api/client-insights/impact-pack/export`);
+export const downloadImpactPack = async (asOf: InsightAsOf = null) => {
+  const response = await fetch(withAsOf(`/api/client-insights/impact-pack/export`, asOf));
   if (!response.ok) {
-    throw new Error("Failed to download impact pack");
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.message || "Failed to download impact pack");
+  }
+  return response.blob();
+};
+
+// Monthly Metrics (UG) report
+export type UgRowKind = "header" | "system" | "formula" | "manual";
+export type UgRowFormat = "int" | "ugx" | "pct" | "avg" | "rate";
+
+export interface UgMetricsRow {
+  row: number;
+  band: string | null;
+  label: string;
+  /** Stable key of a manual row, under which hand-entered figures are saved. */
+  key: string | null;
+  kind: UgRowKind;
+  format: UgRowFormat | null;
+  source: string | null;
+  values: Array<number | null>;
+}
+
+export interface UgMetricsReport {
+  months: Array<{ month: string; periodEnd: string; priceAsOf: string | null; manualUpdatedAt: string | null }>;
+  rows: UgMetricsRow[];
+  definitions: string[];
+  notComputed: Array<{ metric: string; reason: string }>;
+}
+
+/**
+ * Inputs-UG rows for a range of months (YYYY-MM). While the server prepares month-end figures it
+ * answers 202; onPreparing is told, and the request is repeated until the figures are ready.
+ */
+export const fetchUgMetricsReport = async (
+  from: string,
+  to: string,
+  onPreparing: (preparing: boolean) => void,
+  signal?: AbortSignal
+): Promise<UgMetricsReport> => {
+  const url = `${API_URL}/api/reports/ug-metrics/rows?from=${from}&to=${to}`;
+  const started = Date.now();
+  try {
+    for (;;) {
+      const response = await fetch(url, { signal });
+      if (response.status !== 202) return handleResponse(response);
+      onPreparing(true);
+      if (Date.now() - started > SNAPSHOT_MAX_WAIT_MS) throw new Error("Month-end figures are taking too long to prepare; try again later");
+      await waitFor(SNAPSHOT_POLL_MS, signal);
+    }
+  } finally {
+    onPreparing(false);
+  }
+};
+
+/** Saves hand-entered figures for one month (YYYY-MM): a number sets a figure, null clears it. */
+export const saveUgManualInputs = async (month: string, values: Record<string, number | null>) => {
+  const response = await fetch(`${API_URL}/api/reports/ug-metrics/manual-inputs/${month}`, {
+    method: "PUT",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ values }),
+  });
+  return handleResponse(response);
+};
+
+export const downloadUgMetricsWorkbook = async (from: string, to: string) => {
+  const response = await fetch(`${API_URL}/api/reports/ug-metrics/export?from=${from}&to=${to}`);
+  if (!response.ok) {
+    const body = await response.json().catch(() => null);
+    throw new Error(body?.message || "Failed to download the metrics workbook");
   }
   return response.blob();
 };

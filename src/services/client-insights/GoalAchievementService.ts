@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/database';
 import { InsightSegment, MIN_REPORTABLE_GROUP_SIZE } from './ClientInsightsService';
+import { InsightSources, LATEST_SOURCES } from './InsightSources';
 
 /** Goals with a plausible target, i.e. the base for every achievement rate. */
 const TARGETED_STATUSES = `('REACHED_HOLDING', 'REACHED_USED', 'NOT_STARTED', 'IN_PROGRESS')`;
@@ -59,23 +60,30 @@ export class GoalAchievementService {
    * Everything the Goal Achievement page shows for one segment: headline rates,
    * status counts, progress and pace of goals still on the way, how goals with and
    * without targets behave, breakdowns by goal and client profile, and the trend
-   * across Ultima snapshots.
+   * across Ultima snapshots. For a past as-at date, goal values and deposit counts come from the
+   * goal's own transactions at that date's prices (targets are Ultima's current ones).
    */
-  static async getReport(segment: InsightSegment) {
+  static async getReport(segment: InsightSegment, sources: InsightSources = LATEST_SOURCES) {
     const where = this.segmentCondition(segment);
     const [headline, statuses, progressBands, paceBands, targetSetting, trend, breakdowns, gender] = await Promise.all([
-      this.getHeadline(where),
-      this.countByColumn(where, 'status', Prisma.sql`TRUE`),
-      this.countByColumn(where, 'progress_band', Prisma.sql`ga.status = 'IN_PROGRESS'`),
-      this.countByColumn(where, 'pace_band', Prisma.sql`ga.status = 'IN_PROGRESS'`),
-      this.getTargetSettingComparison(where),
-      this.getSnapshotTrend(segment),
-      Promise.all(DIMENSIONS.map((d) => this.getBreakdown(d, where))),
-      this.getWeightedGenderBreakdown(where),
+      this.getHeadline(where, sources),
+      this.countByColumn(where, 'status', Prisma.sql`TRUE`, sources),
+      this.countByColumn(where, 'progress_band', Prisma.sql`ga.status = 'IN_PROGRESS'`, sources),
+      this.countByColumn(where, 'pace_band', Prisma.sql`ga.status = 'IN_PROGRESS'`, sources),
+      this.getTargetSettingComparison(where, sources),
+      this.getSnapshotTrend(segment, sources),
+      Promise.all(DIMENSIONS.map((d) => this.getBreakdown(d, where, sources))),
+      this.getWeightedGenderBreakdown(where, sources),
     ]);
     return {
       segment,
-      asOf: { ultimaSnapshot: headline.snapshot_as_of, transactions: headline.data_as_of },
+      asOf: {
+        snapshot: sources.asOf,
+        ultimaSnapshot: headline.snapshot_as_of,
+        transactions: headline.data_as_of,
+        // Where goal values come from: Ultima Goal Stats (Latest) or the system's own transactions (past dates)
+        valueBasis: sources.asOf === null ? 'ULTIMA' : 'SYSTEM',
+      },
       headline: {
         goals: headline.goals,
         goalsWithTarget: headline.with_target,
@@ -98,7 +106,7 @@ export class GoalAchievementService {
     };
   }
 
-  private static async getHeadline(where: Prisma.Sql) {
+  private static async getHeadline(where: Prisma.Sql, sources: InsightSources) {
     const [row] = await prisma.$queryRaw<any[]>`
       SELECT COUNT(*) FILTER (WHERE ga.in_ultima)::int AS goals,
              COUNT(*) FILTER (WHERE ga.goal_target > 0)::int AS with_target,
@@ -109,16 +117,21 @@ export class GoalAchievementService {
              COUNT(*) FILTER (WHERE ga.status = 'IN_PROGRESS')::int AS in_progress,
              MIN(ga.snapshot_as_of)::text AS snapshot_as_of,
              MIN(ga.data_as_of)::text AS data_as_of
-      FROM goal_achievement ga
+      FROM ${sources.goalAchievement('ga')}
       WHERE ${where}`;
     return row;
   }
 
   /** Goals and Ultima value per value of one view column (fixed column names only). */
-  private static async countByColumn(where: Prisma.Sql, column: 'status' | 'progress_band' | 'pace_band', filter: Prisma.Sql) {
+  private static async countByColumn(
+    where: Prisma.Sql,
+    column: 'status' | 'progress_band' | 'pace_band',
+    filter: Prisma.Sql,
+    sources: InsightSources
+  ) {
     const rows = await prisma.$queryRaw<any[]>`
       SELECT ${Prisma.raw(`ga.${column}`)} AS key, COUNT(*)::int AS goals, COALESCE(SUM(ga.ultima_value), 0)::float8 AS value
-      FROM goal_achievement ga
+      FROM ${sources.goalAchievement('ga')}
       WHERE ${where} AND ${filter} AND ga.in_ultima
       GROUP BY 1 ORDER BY 1`;
     const total = rows.reduce((s, r) => s + r.goals, 0);
@@ -126,7 +139,7 @@ export class GoalAchievementService {
   }
 
   /** Do clients who set a target save differently from those who don't? */
-  private static async getTargetSettingComparison(where: Prisma.Sql) {
+  private static async getTargetSettingComparison(where: Prisma.Sql, sources: InsightSources) {
     const rows = await prisma.$queryRaw<any[]>`
       SELECT CASE WHEN ga.goal_target > 0 THEN 'WITH_TARGET' ELSE 'NO_TARGET' END AS key,
              COUNT(*)::int AS goals,
@@ -134,7 +147,7 @@ export class GoalAchievementService {
              COUNT(*) FILTER (WHERE ga.deposits_12m > 0)::int AS saving_12m,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY ga.deposits_12m) FILTER (WHERE ga.deposits_12m > 0)::float8 AS median_deposits_12m,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY ga.deposit_amount_12m) FILTER (WHERE ga.deposits_12m > 0)::float8 AS median_amount_12m
-      FROM goal_achievement ga
+      FROM ${sources.goalAchievement('ga')}
       WHERE ${where} AND ga.in_ultima
       GROUP BY 1 ORDER BY 1 DESC`;
     return rows.map((r) => ({
@@ -150,8 +163,9 @@ export class GoalAchievementService {
   /**
    * Goals at target in each Ultima snapshot. Only "reached and holding" can be
    * seen per snapshot; the trend grows as monthly Goal Stats exports are imported.
+   * For a past as-at date, only Ultima snapshots up to that date are included.
    */
-  private static async getSnapshotTrend(segment: InsightSegment) {
+  private static async getSnapshotTrend(segment: InsightSegment, sources: InsightSources) {
     const segmentFilter =
       segment === 'ALL'
         ? Prisma.empty
@@ -164,6 +178,7 @@ export class GoalAchievementService {
       JOIN goals g ON g.id = s."goalId"
       JOIN accounts a ON a.id = g."accountId"
       WHERE TRUE ${segmentFilter}
+        ${sources.asOf === null ? Prisma.empty : Prisma.sql`AND s."asOfDate" <= ${sources.asOf}::date`}
       GROUP BY 1 ORDER BY 1`;
     return rows.map((r) => ({ asOf: r.as_of, goalsWithTarget: r.targeted, atTarget: r.at_target, atTargetRate: ratio(r.at_target, r.targeted) }));
   }
@@ -172,7 +187,7 @@ export class GoalAchievementService {
    * Achievement rates for one dimension over goals with a plausible target.
    * Groups under the minimum size are folded into one row; Unknown comes last.
    */
-  private static async getBreakdown(definition: AchievementDimension, where: Prisma.Sql): Promise<AchievementBreakdown> {
+  private static async getBreakdown(definition: AchievementDimension, where: Prisma.Sql, sources: InsightSources): Promise<AchievementBreakdown> {
     const raw = await prisma.$queryRaw<any[]>`
       SELECT ${Prisma.raw(definition.expression)} AS key,
              COUNT(*)::int AS goals,
@@ -181,8 +196,8 @@ export class GoalAchievementService {
              COUNT(*) FILTER (WHERE ga.status = 'REACHED_USED')::int AS reached_used,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY ga.progress) FILTER (WHERE ga.status = 'IN_PROGRESS')::float8 AS median_progress,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY ga.goal_target)::float8 AS median_target
-      FROM goal_achievement ga
-      LEFT JOIN account_profile_aum v ON v.account_id = ga.account_id
+      FROM ${sources.goalAchievement('ga')}
+      LEFT JOIN ${sources.accounts('v')} ON v.account_id = ga.account_id
       WHERE ${where} AND ga.status IN ${Prisma.raw(TARGETED_STATUSES)}
       GROUP BY 1`;
 
@@ -218,7 +233,7 @@ export class GoalAchievementService {
    * probability (declared = 1 or 0). Goals whose holder has no gender estimate are
    * reported separately.
    */
-  private static async getWeightedGenderBreakdown(where: Prisma.Sql): Promise<AchievementBreakdown> {
+  private static async getWeightedGenderBreakdown(where: Prisma.Sql, sources: InsightSources): Promise<AchievementBreakdown> {
     const [r] = await prisma.$queryRaw<any[]>`
       SELECT
         COALESCE(SUM(v.female_probability), 0)::float8 AS f_goals,
@@ -233,8 +248,8 @@ export class GoalAchievementService {
         COUNT(*) FILTER (WHERE v.female_probability IS NULL AND ga.status IN ('REACHED_HOLDING', 'REACHED_USED'))::int AS u_reached,
         COUNT(*) FILTER (WHERE v.female_probability IS NULL AND ga.status = 'REACHED_HOLDING')::int AS u_holding,
         COUNT(*) FILTER (WHERE v.female_probability IS NULL AND ga.status = 'REACHED_USED')::int AS u_used
-      FROM goal_achievement ga
-      LEFT JOIN account_profile_aum v ON v.account_id = ga.account_id
+      FROM ${sources.goalAchievement('ga')}
+      LEFT JOIN ${sources.accounts('v')} ON v.account_id = ga.account_id
       WHERE ${where} AND ga.status IN ${Prisma.raw(TARGETED_STATUSES)}`;
 
     const row = (key: string, goals: number, reached: number, holding: number, used: number): AchievementRow => ({

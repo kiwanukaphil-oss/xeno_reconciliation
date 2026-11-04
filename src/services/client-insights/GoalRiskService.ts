@@ -1,6 +1,7 @@
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/database';
 import { ClientInsightsService, InsightSegment, MIN_REPORTABLE_GROUP_SIZE } from './ClientInsightsService';
+import { InsightSources, LATEST_SOURCES } from './InsightSources';
 
 /** A goal is "drifted" when any fund's actual share is this many percentage points from target. */
 export const DRIFT_TOLERANCE_PP = 10;
@@ -63,21 +64,22 @@ const toSplit = (r: any, prefix: '' | 'target_') => ({
  */
 export class GoalRiskService {
   /** Risk score, goal category and drift summaries plus the largest drifted goals. */
-  static async getRiskAllocation(segment: InsightSegment, limit: number) {
+  static async getRiskAllocation(segment: InsightSegment, limit: number, sources: InsightSources = LATEST_SOURCES) {
     const where = ClientInsightsService.segmentCondition(segment);
+    const goals = sources.goalHoldings();
 
     const byRiskScore = await prisma.$queryRaw<any[]>`
       SELECT risk_score, COUNT(*)::int AS goals, SUM(total_value)::float8 AS value,
              (100 * SUM(xudef_value + xuref_value) / NULLIF(SUM(total_value), 0))::float8 AS actual_equity_pct,
              (SUM(target_equity_pct * total_value) / NULLIF(SUM(total_value) FILTER (WHERE target_equity_pct IS NOT NULL), 0))::float8 AS target_equity_pct
-      FROM goal_holdings WHERE is_funded AND ${where}
+      FROM ${goals} WHERE is_funded AND ${where}
       GROUP BY risk_score ORDER BY risk_score NULLS FIRST`;
 
     const byCategory = await prisma.$queryRaw<any[]>`
       SELECT goal_category, COUNT(*)::int AS goals, SUM(total_value)::float8 AS value,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY total_value)::float8 AS median_value,
              (100 * SUM(xudef_value + xuref_value) / NULLIF(SUM(total_value), 0))::float8 AS actual_equity_pct
-      FROM goal_holdings WHERE is_funded AND ${where}
+      FROM ${goals} WHERE is_funded AND ${where}
       GROUP BY goal_category ORDER BY value DESC`;
 
     const driftBands = await prisma.$queryRaw<any[]>`
@@ -88,7 +90,7 @@ export class GoalRiskService {
           WHEN drift_pp < 20 THEN '3. 10-20 points'
           ELSE '4. 20+ points' END AS band,
         COUNT(*)::int AS goals, SUM(total_value)::float8 AS value
-      FROM goal_holdings WHERE is_funded AND ${where}
+      FROM ${goals} WHERE is_funded AND ${where}
       GROUP BY 1 ORDER BY 1`;
 
     // Value-weighted average gap per fund among drifted goals: shows which way holdings lean
@@ -98,23 +100,24 @@ export class GoalRiskService {
         (SUM((xubf_pct - target_xubf_pct) * total_value) / NULLIF(SUM(total_value), 0))::float8 AS xubf_gap,
         (SUM((xudef_pct - target_xudef_pct) * total_value) / NULLIF(SUM(total_value), 0))::float8 AS xudef_gap,
         (SUM((xuref_pct - target_xuref_pct) * total_value) / NULLIF(SUM(total_value), 0))::float8 AS xuref_gap
-      FROM goal_holdings WHERE is_funded AND ${where} AND drift_pp >= ${DRIFT_TOLERANCE_PP}`;
+      FROM ${goals} WHERE is_funded AND ${where} AND drift_pp >= ${DRIFT_TOLERANCE_PP}`;
 
     const largestDrifted = await prisma.$queryRaw<any[]>`
       SELECT goal_number, account_number, account_type, goal_category, risk_score,
              total_value::float8 AS value, drift_pp::float8 AS drift_pp, ${SPLIT_COLUMNS}
-      FROM goal_holdings WHERE is_funded AND ${where} AND drift_pp >= ${DRIFT_TOLERANCE_PP}
+      FROM ${goals} WHERE is_funded AND ${where} AND drift_pp >= ${DRIFT_TOLERANCE_PP}
       ORDER BY total_value DESC LIMIT ${limit}`;
 
     const [issues] = await prisma.$queryRaw<any[]>`
       SELECT COUNT(*) FILTER (WHERE xummf_pct < 0 OR xubf_pct < 0 OR xudef_pct < 0 OR xuref_pct < 0)::int AS negative_fund_balance,
              COUNT(*) FILTER (WHERE target_xummf_pct IS NULL)::int AS no_target_split
-      FROM goal_holdings WHERE is_funded AND ${where}`;
+      FROM ${goals} WHERE is_funded AND ${where}`;
 
     const totalValue = byRiskScore.reduce((s, r) => s + r.value, 0);
 
     return {
       segment,
+      asOf: sources.asOf,
       driftTolerancePp: DRIFT_TOLERANCE_PP,
       totalValue,
       byRiskScore: byRiskScore.map((r) => ({
@@ -155,29 +158,29 @@ export class GoalRiskService {
    * flagged goals/accounts (largest first, capped per rule). Goal-level rules use
    * goal_holdings; the age/balance rule is account-level (account_profile_aum).
    */
-  static async getSuitabilityReview(limitPerRule: number) {
+  static async getSuitabilityReview(limitPerRule: number, sources: InsightSources = LATEST_SOURCES) {
     const r = SUITABILITY_RULES;
     const flagged = await prisma.$queryRaw<any[]>`
       WITH flagged AS (
         SELECT 'OLDER_HIGH_EQUITY' AS rule, gh.account_number, gh.goal_number, ap.age_years, gh.total_value AS value,
                gh.actual_equity_pct, gh.target_equity_pct, gh.risk_score
-        FROM goal_holdings gh JOIN account_profile_aum ap ON ap.account_id = gh.account_id
+        FROM ${sources.goalHoldings('gh')} JOIN ${sources.accounts('ap')} ON ap.account_id = gh.account_id
         WHERE gh.is_funded AND gh.segment = 'INDIVIDUAL'
           AND ap.age_years >= ${r.OLDER_HIGH_EQUITY.minAge} AND gh.actual_equity_pct >= ${r.OLDER_HIGH_EQUITY.minEquityPct}
         UNION ALL
         SELECT 'EQUITY_WITHOUT_ASSESSMENT', gh.account_number, gh.goal_number, ap.age_years, gh.total_value,
                gh.actual_equity_pct, gh.target_equity_pct, gh.risk_score
-        FROM goal_holdings gh JOIN account_profile_aum ap ON ap.account_id = gh.account_id
+        FROM ${sources.goalHoldings('gh')} JOIN ${sources.accounts('ap')} ON ap.account_id = gh.account_id
         WHERE gh.is_funded AND gh.segment = 'INDIVIDUAL'
           AND COALESCE(gh.risk_score, 0) = 0 AND gh.actual_equity_pct >= ${r.EQUITY_WITHOUT_ASSESSMENT.minEquityPct}
         UNION ALL
         SELECT 'EQUITY_ABOVE_TARGET', gh.account_number, gh.goal_number, ap.age_years, gh.total_value,
                gh.actual_equity_pct, gh.target_equity_pct, gh.risk_score
-        FROM goal_holdings gh JOIN account_profile_aum ap ON ap.account_id = gh.account_id
+        FROM ${sources.goalHoldings('gh')} JOIN ${sources.accounts('ap')} ON ap.account_id = gh.account_id
         WHERE gh.is_funded AND gh.segment = 'INDIVIDUAL' AND gh.equity_gap_pp >= ${r.EQUITY_ABOVE_TARGET.minGapPp}
         UNION ALL
         SELECT 'YOUNG_LARGE_BALANCE', ap.account_number, NULL, ap.age_years, ap.aum, NULL, NULL, NULL
-        FROM account_profile_aum ap
+        FROM ${sources.accounts('ap')}
         WHERE ap.segment = 'INDIVIDUAL' AND ap.age_years < ${r.YOUNG_LARGE_BALANCE.maxAge}
           AND ap.aum >= ${r.YOUNG_LARGE_BALANCE.minBalance}
       ),
@@ -207,6 +210,6 @@ export class GoalRiskService {
         })),
       };
     });
-    return { scope: 'Individual funded accounts and goals', rules };
+    return { scope: 'Individual funded accounts and goals', asOf: sources.asOf, rules };
   }
 }

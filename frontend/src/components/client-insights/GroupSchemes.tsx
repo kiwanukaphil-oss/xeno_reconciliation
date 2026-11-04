@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { Search } from "lucide-react";
 import { fetchGroupSchemes } from "../../services/api";
 import { ErrorPanel, LoadingPanel, ShareBar, StatTile } from "./InsightControls";
+import { useInsightAsOf } from "./InsightAsOf";
 import { formatCount, formatGroupLabel, formatPct, formatUGX, formatUGXCompact } from "./insightFormat";
 
 interface GroupScheme {
@@ -34,20 +35,28 @@ const GroupSchemes = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
-    loadReport();
-  }, []);
+  const { asOf } = useInsightAsOf();
 
-  const loadReport = async () => {
+  useEffect(() => {
+    let active = true;
+    loadReport(() => active);
+    // A slower, older request (e.g. a date still being prepared) must not overwrite newer figures
+    return () => {
+      active = false;
+    };
+  }, [asOf]);
+
+  const loadReport = async (isActive: () => boolean = () => true) => {
     try {
       setLoading(true);
       setError(null);
-      setReport(await fetchGroupSchemes());
+      const result = await fetchGroupSchemes(asOf);
+      if (isActive()) setReport(result);
     } catch (err: any) {
       console.error("Failed to load group schemes:", err);
-      setError(err.message || "Failed to load group schemes");
+      if (isActive()) setError(err.message || "Failed to load group schemes");
     } finally {
-      setLoading(false);
+      if (isActive()) setLoading(false);
     }
   };
 
@@ -60,7 +69,7 @@ const GroupSchemes = () => {
   }, [report, search]);
 
   if (loading) return <LoadingPanel />;
-  if (error || !report) return <ErrorPanel message={error ?? "No data"} onRetry={loadReport} />;
+  if (error || !report) return <ErrorPanel message={error ?? "No data"} onRetry={() => loadReport()} />;
 
   const totalCategoryAum = report.byCategory.reduce((s, c) => s + Math.max(c.memberAum, 0), 0);
 
