@@ -1,8 +1,9 @@
 import { useEffect, useState } from "react";
 import { AlertTriangle, Info } from "lucide-react";
-import { fetchRiskAllocation, fetchSuitabilityReview, type InsightSegment } from "../../services/api";
+import { fetchRiskAllocation, fetchSuitabilityReview, type GenderView, type InsightSegment } from "../../services/api";
 import { BreakdownBarList, type Breakdown } from "./BreakdownBarList";
 import { ErrorPanel, LoadingPanel, ShareBar, StatTile, ToggleGroup } from "./InsightControls";
+import { GenderControls, GenderLegend, GenderSplitBar, type GenderSplit, type GenderSplitMode } from "./GenderSplit";
 import { useInsightAsOf } from "./InsightAsOf";
 import {
   formatCount,
@@ -26,8 +27,11 @@ interface RiskAllocationReport {
     shareOfValue: number;
     actualEquityPct: number | null;
     targetEquityPct: number | null;
+    /** count = goals, value = goal value, by the holder's declared gender */
+    gender: GenderSplit;
   }>;
   byGoalCategory: Breakdown;
+  genderNote: string;
   driftBands: Array<{ band: string; goals: number; value: number; shareOfValue: number }>;
   driftDirection: { goals: number; value: number; averageGapPp: FundSplit };
   largestDriftedGoals: Array<{
@@ -102,6 +106,8 @@ const toDriftBreakdown = (bands: RiskAllocationReport["driftBands"]): Breakdown 
  */
 const RiskAllocation = () => {
   const [segment, setSegment] = useState<InsightSegment>("INDIVIDUAL");
+  const [genderView, setGenderView] = useState<GenderView>("IDENTIFIED");
+  const [genderSplit, setGenderSplit] = useState<GenderSplitMode>("OFF");
   const [report, setReport] = useState<RiskAllocationReport | null>(null);
   const [review, setReview] = useState<SuitabilityReview | null>(null);
   const [loading, setLoading] = useState(true);
@@ -111,18 +117,18 @@ const RiskAllocation = () => {
 
   useEffect(() => {
     let active = true;
-    loadReport(segment, () => active);
+    loadReport(segment, genderView, () => active);
     // A slower, older request (e.g. a date still being prepared) must not overwrite newer figures
     return () => {
       active = false;
     };
-  }, [segment, asOf]);
+  }, [segment, genderView, asOf]);
 
-  const loadReport = async (selected: InsightSegment, isActive: () => boolean = () => true) => {
+  const loadReport = async (selected: InsightSegment, view: GenderView, isActive: () => boolean = () => true) => {
     try {
       setLoading(true);
       setError(null);
-      const [risk, suitability] = await Promise.all([fetchRiskAllocation(selected, 50, asOf), fetchSuitabilityReview(25, asOf)]);
+      const [risk, suitability] = await Promise.all([fetchRiskAllocation(selected, 50, asOf, view), fetchSuitabilityReview(25, asOf)]);
       if (!isActive()) return;
       setReport(risk);
       setReview(suitability);
@@ -135,18 +141,25 @@ const RiskAllocation = () => {
   };
 
   const drifted = report?.driftDirection;
+  const splitView = segment !== "INSTITUTIONAL" && genderSplit === "ON" ? genderView : undefined;
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <ToggleGroup options={SEGMENT_OPTIONS} value={segment} onChange={setSegment} />
+        <div className="flex flex-wrap items-center gap-3">
+          <ToggleGroup options={SEGMENT_OPTIONS} value={segment} onChange={setSegment} />
+          {segment !== "INSTITUTIONAL" && (
+            <GenderControls view={genderView} onViewChange={setGenderView} split={genderSplit} onSplitChange={setGenderSplit} />
+          )}
+          {splitView && <GenderLegend />}
+        </div>
         <p className="text-sm text-gray-600">
           Funded goals (UGX 5,000+). Target split = Ultima's current allocation for each goal.
         </p>
       </div>
 
       {loading && <LoadingPanel />}
-      {error && !loading && <ErrorPanel message={error} onRetry={() => loadReport(segment)} />}
+      {error && !loading && <ErrorPanel message={error} onRetry={() => loadReport(segment, genderView)} />}
 
       {report && review && !loading && !error && drifted && (
         <>
@@ -173,6 +186,7 @@ const RiskAllocation = () => {
             <h2 className="text-lg font-semibold text-gray-900 mb-1">Value by risk score</h2>
             <p className="text-sm text-gray-500 mb-4">
               Equity share = domestic + regional equity funds, weighted by goal value. Higher scores should hold more equity.
+              {splitView && ` Female / male value is by the goal holder's declared gender. ${report.genderNote}`}
             </p>
             <div className="overflow-x-auto">
               <table className="w-full text-sm">
@@ -185,6 +199,7 @@ const RiskAllocation = () => {
                     <th className="text-right py-2 font-medium">Equity: actual</th>
                     <th className="text-right py-2 font-medium">Equity: target</th>
                     <th className="text-right py-2 font-medium">Gap</th>
+                    {splitView && <th className="text-left py-2 pl-6 font-medium">Female / male value</th>}
                   </tr>
                 </thead>
                 <tbody>
@@ -207,6 +222,11 @@ const RiskAllocation = () => {
                         <td className="py-2 text-right text-gray-900">{row.actualEquityPct === null ? "–" : `${row.actualEquityPct.toFixed(1)}%`}</td>
                         <td className="py-2 text-right text-gray-900">{row.targetEquityPct === null ? "–" : `${row.targetEquityPct.toFixed(1)}%`}</td>
                         <td className="py-2 text-right text-gray-600">{formatPoints(gap)}</td>
+                        {splitView && (
+                          <td className="py-2 pl-6 w-48">
+                            <GenderSplitBar split={row.gender} measure="value" view={splitView} countLabel="goals" />
+                          </td>
+                        )}
                       </tr>
                     );
                   })}
@@ -216,7 +236,7 @@ const RiskAllocation = () => {
           </div>
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            <BreakdownBarList breakdown={report.byGoalCategory} metric="aum" countLabel="goals" />
+            <BreakdownBarList breakdown={report.byGoalCategory} metric="aum" countLabel="goals" genderSplitView={splitView} />
             <div className="space-y-6">
               <BreakdownBarList breakdown={toDriftBreakdown(report.driftBands)} metric="aum" countLabel="goals" />
               <div className="bg-white rounded-lg shadow p-6">

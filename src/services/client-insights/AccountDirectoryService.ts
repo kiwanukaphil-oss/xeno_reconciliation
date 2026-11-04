@@ -8,9 +8,6 @@ import { InsightSources, LATEST_SOURCES } from './InsightSources';
 export type DirectoryFundedFilter = 'FUNDED' | 'UNFUNDED' | 'ALL';
 export type DirectoryMissingFilter = 'ANY' | 'GENDER' | 'DATE_OF_BIRTH' | 'LOCATION' | 'NO_PROFILE';
 export type DirectorySort = 'balance' | 'name' | 'lastDeposit' | 'accountNumber';
-/** Where an account's gender comes from, or why it has none. */
-export type GenderEstimateStatus = 'DECLARED' | 'RATHER_NOT_SAY' | 'ESTIMATED' | 'LOW_CONFIDENCE' | 'NOT_ESTIMABLE';
-export type DirectoryEstimateFilter = 'ESTIMATED' | 'LOW_CONFIDENCE' | 'NOT_ESTIMABLE';
 
 export interface AccountDirectoryFilters {
   search?: string;
@@ -19,7 +16,6 @@ export interface AccountDirectoryFilters {
   channel?: string;
   missing?: DirectoryMissingFilter;
   gender?: string; // declared gender
-  genderEstimate?: DirectoryEstimateFilter; // among accounts with no declared gender
   minBalance?: number;
 }
 
@@ -41,13 +37,7 @@ export interface AccountDirectoryRow {
   clientName: string;
   balance: number;
   isFunded: boolean;
-  gender: string;
-  genderEstimate: {
-    status: GenderEstimateStatus;
-    gender: 'FEMALE' | 'MALE' | null; // likelier gender, for ESTIMATED and LOW_CONFIDENCE
-    confidence: number | null; // probability of that gender
-    note: string | null; // why there is no estimate
-  };
+  gender: string; // declared gender: FEMALE, MALE, UNDISCLOSED or UNKNOWN
   ageYears: number | null;
   location: string | null;
   region: string | null;
@@ -80,13 +70,6 @@ const PAGE_SORT_SQL: Record<DirectorySort, (dir: 'ASC' | 'DESC') => string> = {
   accountNumber: (dir) => `page.account_number ${dir}`,
 };
 
-// Accounts without a declared gender, by what the name-based estimator could do for them
-const ESTIMATE_SQL: Record<DirectoryEstimateFilter, string> = {
-  ESTIMATED: `(v.gender = 'UNKNOWN' AND v.gender_basis = 'ESTIMATED')`,
-  LOW_CONFIDENCE: `(v.gender = 'UNKNOWN' AND v.gender_basis = 'UNKNOWN' AND v.female_probability IS NOT NULL)`,
-  NOT_ESTIMABLE: `(v.gender = 'UNKNOWN' AND v.female_probability IS NULL)`,
-};
-
 const MISSING_SQL: Record<DirectoryMissingFilter, string> = {
   ANY: `(NOT v.has_profile OR v.gender = 'UNKNOWN' OR v.date_of_birth IS NULL OR v.location_group = 'UNKNOWN')`,
   GENDER: `v.gender = 'UNKNOWN'`,
@@ -99,7 +82,7 @@ const MISSING_SQL: Record<DirectoryMissingFilter, string> = {
 const ROW_COLUMNS = Prisma.raw(`
   v.account_id, v.account_number, v.account_type, v.account_category, v.client_id,
   v.aum::float8 AS balance, v.aum::text AS balance_exact, v.is_funded, v.has_profile,
-  v.gender, v.gender_basis, v.female_probability, v.date_of_birth IS NULL AS no_dob, v.age_years, v.location_group,
+  v.gender, v.date_of_birth IS NULL AS no_dob, v.age_years, v.location_group,
   v.district, v.region, v.country, v.location_status, v.signup_channel, v.phone_network,
   v.last_deposit_date::text AS last_deposit_date, v.deposits_12m, v.contact_closed`);
 
@@ -259,10 +242,7 @@ export class AccountDirectoryService {
       { header: 'Category', key: 'accountCategory', width: 24 },
       { header: 'Balance (UGX)', key: 'balance', width: 16, style: { numFmt: '#,##0' } },
       { header: 'Funded', key: 'funded', width: 8 },
-      { header: 'Gender (declared)', key: 'gender', width: 16 },
-      { header: 'Gender (estimated from name)', key: 'estimatedGender', width: 16 },
-      { header: 'Estimate confidence', key: 'estimateConfidence', width: 12, style: { numFmt: '0%' } },
-      { header: 'Estimate status', key: 'estimateStatus', width: 34 },
+      { header: 'Gender', key: 'gender', width: 16 },
       { header: 'Age', key: 'ageYears', width: 6 },
       { header: 'Location', key: 'location', width: 20 },
       { header: 'Region', key: 'region', width: 12 },
@@ -302,9 +282,6 @@ export class AccountDirectoryService {
         sheet.addRow({
           ...row,
           funded: row.isFunded ? 'Yes' : 'No',
-          estimatedGender: row.genderEstimate.gender ?? '',
-          estimateConfidence: row.genderEstimate.confidence,
-          estimateStatus: describeEstimateStatus(row.genderEstimate),
           contactClosed: row.contactClosed ? 'Yes' : '',
           missing: row.missing.join(', '),
         }).commit();
@@ -338,7 +315,6 @@ export class AccountDirectoryService {
     if (filters.funded === 'UNFUNDED') conditions.push(Prisma.sql`NOT v.is_funded`);
     if (filters.channel) conditions.push(Prisma.sql`v.signup_channel = ${filters.channel}`);
     if (filters.gender) conditions.push(Prisma.sql`v.gender = ${filters.gender}`);
-    if (filters.genderEstimate) conditions.push(Prisma.raw(ESTIMATE_SQL[filters.genderEstimate]));
     if (filters.missing) conditions.push(Prisma.raw(MISSING_SQL[filters.missing]));
     if (filters.minBalance !== undefined) conditions.push(Prisma.sql`v.aum >= ${filters.minBalance}`);
 
@@ -373,7 +349,6 @@ function toDirectoryRow(r: any): AccountDirectoryRow {
     balance: r.balance,
     isFunded: r.is_funded,
     gender: r.gender,
-    genderEstimate: readGenderEstimate(r),
     ageYears: r.age_years,
     location: r.district ?? (r.location_status === 'ABROAD' ? r.country : null),
     region: r.region ?? (r.location_status === 'ABROAD' ? 'ABROAD' : null),
@@ -384,42 +359,4 @@ function toDirectoryRow(r: any): AccountDirectoryRow {
     contactClosed: r.contact_closed,
     missing,
   };
-}
-
-/**
- * Name-based gender estimate for an account with no declared gender: the likelier
- * gender and its probability, or the reason there is no estimate. Declared and
- * "rather not say" accounts are never estimated.
- */
-function readGenderEstimate(r: any): AccountDirectoryRow['genderEstimate'] {
-  if (r.gender === 'FEMALE' || r.gender === 'MALE') return { status: 'DECLARED', gender: null, confidence: null, note: null };
-  if (r.gender === 'UNDISCLOSED') return { status: 'RATHER_NOT_SAY', gender: null, confidence: null, note: 'Client chose not to say' };
-  if (r.female_probability === null || r.female_probability === undefined) {
-    const note = r.account_type === 'PERSONAL' ? 'Name not recognised' : 'Only personal accounts are estimated';
-    return { status: 'NOT_ESTIMABLE', gender: null, confidence: null, note };
-  }
-  const female = Number(r.female_probability);
-  const likelier = female >= 0.5 ? 'FEMALE' : 'MALE';
-  return {
-    status: r.gender_basis === 'ESTIMATED' ? 'ESTIMATED' : 'LOW_CONFIDENCE',
-    gender: likelier,
-    confidence: likelier === 'FEMALE' ? female : 1 - female,
-    note: null,
-  };
-}
-
-/** Plain-language estimate status for the export. */
-function describeEstimateStatus(estimate: AccountDirectoryRow['genderEstimate']): string {
-  switch (estimate.status) {
-    case 'DECLARED':
-      return 'Declared (no estimate needed)';
-    case 'RATHER_NOT_SAY':
-      return 'Rather not say (not estimated)';
-    case 'ESTIMATED':
-      return 'Estimated (90%+ confident)';
-    case 'LOW_CONFIDENCE':
-      return 'Low confidence (below 90%)';
-    default:
-      return `No estimate: ${estimate.note}`;
-  }
 }

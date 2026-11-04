@@ -3,8 +3,12 @@ import { GENDER_CONFIDENCE_THRESHOLD, GenderEstimator } from '../src/services/cl
 import { MaterializedViewService } from '../src/services/unit-registry/MaterializedViewService';
 
 /**
+ * CANDIDATE FOR REMOVAL: Client Insights no longer uses name-based gender estimates; gender
+ * figures come from declared gender only, with the unidentified allocated in the known ratio
+ * (src/services/client-insights/GenderAllocation.ts).
+ *
  * Retrains the name-based gender estimator and rescores personal accounts with no
- * declared gender. Also runs automatically at the end of import-client-profiles.ts.
+ * declared gender. (No longer run automatically by import-client-profiles.ts.)
  *
  *   npx ts-node scripts/estimate-genders.ts --dry-run   (validation only, nothing written)
  *   npx ts-node scripts/estimate-genders.ts

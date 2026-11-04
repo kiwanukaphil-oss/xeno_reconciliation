@@ -1,3 +1,9 @@
+/*
+ * CANDIDATE FOR REMOVAL: Client Insights no longer uses name-based gender estimates; gender
+ * figures come from declared gender only, with the unidentified allocated in the known ratio
+ * (src/services/client-insights/GenderAllocation.ts).
+ * Kept, with its tables and columns, until removal is confirmed; nothing runs it automatically.
+ */
 import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/database';
 import { logger } from '../../config/logger';

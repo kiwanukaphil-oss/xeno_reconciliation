@@ -2,7 +2,6 @@ import fs from 'fs';
 import path from 'path';
 import { prisma } from '../src/config/database';
 import { ClientProfileImporter } from '../src/services/client-profile/ClientProfileImporter';
-import { GenderEstimator } from '../src/services/client-profile/GenderEstimator';
 import { MaterializedViewService } from '../src/services/unit-registry/MaterializedViewService';
 import { InsightSnapshotService } from '../src/services/client-insights/InsightSnapshotService';
 
@@ -35,9 +34,8 @@ async function runClientProfileImport() {
   try {
     const report = await ClientProfileImporter.importFromFiles(files, { dryRun, asOfDate });
     if (!dryRun) {
-      // Retrain on the newly declared genders so estimates stay in step with the profiles
-      const estimate = await GenderEstimator.run();
-      console.log(`Gender estimates: ${estimate.scoredAccounts} scored, ${estimate.labelledEstimates} labelled (hold-out accuracy ${(estimate.holdout.accuracy * 100).toFixed(1)}%)`);
+      // The name-based gender estimator no longer reruns here: Client Insights reports declared gender only
+      // (see GenderEstimator.ts, flagged for removal). It can still be run by hand: scripts/estimate-genders.ts
       console.log('Refreshing account_profile_aum and goal_holdings views...');
       await MaterializedViewService.refreshClientInsightViews();
       // Profiles and goal targets feed every as-at snapshot; they rebuild on the next upload or when opened

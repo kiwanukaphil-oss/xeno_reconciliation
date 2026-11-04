@@ -2,6 +2,16 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/database';
 import { ClientInsightsService, InsightSegment, MIN_REPORTABLE_GROUP_SIZE } from './ClientInsightsService';
 import { InsightSources, LATEST_SOURCES } from './InsightSources';
+import {
+  addGenderTallies,
+  describeGenderView,
+  EMPTY_TALLY,
+  GenderTally,
+  genderTallySql,
+  GenderView,
+  readGenderTally,
+  splitGender,
+} from './GenderAllocation';
 
 /** A goal is "drifted" when any fund's actual share is this many percentage points from target. */
 export const DRIFT_TOLERANCE_PP = 10;
@@ -27,10 +37,13 @@ const SPLIT_COLUMNS = Prisma.raw(`
  * bar list renders them). Here "accounts" carries the number of goals. Categories
  * with fewer than the minimum number of goals are folded into one row.
  */
-function buildGoalCategoryBreakdown(byCategory: any[]) {
+function buildGoalCategoryBreakdown(byCategory: any[], genderView: GenderView, genderTallies: Map<string, GenderTally>) {
+  const baseTally = addGenderTallies([...genderTallies.values()]);
+  const genderOf = (categories: any[]) =>
+    splitGender(addGenderTallies(categories.map((c) => genderTallies.get(String(c.goal_category)) ?? EMPTY_TALLY)), genderView, baseTally);
   const totalGoals = byCategory.reduce((s, r) => s + r.goals, 0);
   const totalValue = byCategory.reduce((s, r) => s + r.value, 0);
-  const toRow = (key: string, goals: number, value: number, median: number | null) => ({
+  const toRow = (key: string, goals: number, value: number, median: number | null, categories: any[]) => ({
     key,
     accounts: goals,
     aum: value,
@@ -38,14 +51,15 @@ function buildGoalCategoryBreakdown(byCategory: any[]) {
     shareOfAum: totalValue ? value / totalValue : 0,
     medianBalance: median,
     averageBalance: goals ? value / goals : null,
+    gender: genderOf(categories),
   });
 
   const shown = byCategory.filter((r) => r.goals >= MIN_REPORTABLE_GROUP_SIZE);
   const folded = byCategory.filter((r) => r.goals < MIN_REPORTABLE_GROUP_SIZE);
-  const rows = shown.map((r) => toRow(r.goal_category, r.goals, r.value, r.median_value));
+  const rows = shown.map((r) => toRow(r.goal_category, r.goals, r.value, r.median_value, [r]));
   if (folded.length) {
     rows.push(toRow(`Other (categories under ${MIN_REPORTABLE_GROUP_SIZE} goals)`,
-      folded.reduce((s, r) => s + r.goals, 0), folded.reduce((s, r) => s + r.value, 0), null));
+      folded.reduce((s, r) => s + r.goals, 0), folded.reduce((s, r) => s + r.value, 0), null, folded));
   }
   return { dimension: 'goalCategory', label: 'Goal category', knownShareOfAccounts: 1, knownShareOfAum: 1, rows };
 }
@@ -63,10 +77,24 @@ const toSplit = (r: any, prefix: '' | 'target_') => ({
  * suitability review list. Covers funded goals (value >= UGX 5,000).
  */
 export class GoalRiskService {
-  /** Risk score, goal category and drift summaries plus the largest drifted goals. */
-  static async getRiskAllocation(segment: InsightSegment, limit: number, sources: InsightSources = LATEST_SOURCES) {
+  /**
+   * Risk score, goal category and drift summaries plus the largest drifted goals.
+   * Risk score and goal category rows carry a female/male split (count = goals,
+   * value = goal value) by the holder's declared gender, under genderView.
+   */
+  static async getRiskAllocation(
+    segment: InsightSegment,
+    limit: number,
+    genderView: GenderView = 'IDENTIFIED',
+    sources: InsightSources = LATEST_SOURCES
+  ) {
     const where = ClientInsightsService.segmentCondition(segment);
     const goals = sources.goalHoldings();
+    const [riskGender, categoryGender] = await Promise.all([
+      this.tallyGenderBy('gh.risk_score', segment, sources),
+      this.tallyGenderBy('gh.goal_category', segment, sources),
+    ]);
+    const riskBaseTally = addGenderTallies([...riskGender.values()]);
 
     const byRiskScore = await prisma.$queryRaw<any[]>`
       SELECT risk_score, COUNT(*)::int AS goals, SUM(total_value)::float8 AS value,
@@ -127,8 +155,11 @@ export class GoalRiskService {
         shareOfValue: totalValue ? r.value / totalValue : 0,
         actualEquityPct: r.actual_equity_pct,
         targetEquityPct: r.target_equity_pct,
+        gender: splitGender(riskGender.get(String(r.risk_score)) ?? EMPTY_TALLY, genderView, riskBaseTally),
       })),
-      byGoalCategory: buildGoalCategoryBreakdown(byCategory),
+      byGoalCategory: buildGoalCategoryBreakdown(byCategory, genderView, categoryGender),
+      genderView,
+      genderNote: describeGenderView(genderView),
       driftBands: driftBands.map((b) => ({ band: b.band, goals: b.goals, value: b.value, shareOfValue: totalValue ? b.value / totalValue : 0 })),
       driftDirection: {
         goals: direction.goals,
@@ -151,6 +182,25 @@ export class GoalRiskService {
         fundedGoalsWithoutTargetSplit: issues.no_target_split,
       },
     };
+  }
+
+  /**
+   * Declared-gender tally of funded goals per value of one goal_holdings column
+   * (fixed column names only), keyed by the value as text ("null" for no value).
+   */
+  private static async tallyGenderBy(
+    column: 'gh.risk_score' | 'gh.goal_category',
+    segment: InsightSegment,
+    sources: InsightSources
+  ): Promise<Map<string, GenderTally>> {
+    const segmentFilter = segment === 'ALL' ? Prisma.empty : Prisma.sql`AND gh.segment = ${segment}`;
+    const rows = await prisma.$queryRaw<any[]>`
+      SELECT ${Prisma.raw(column)} AS key, ${Prisma.raw(genderTallySql('v.gender', 'gh.total_value'))}
+      FROM ${sources.goalHoldings('gh')}
+      LEFT JOIN ${sources.accounts('v')} ON v.account_id = gh.account_id
+      WHERE gh.is_funded ${segmentFilter}
+      GROUP BY 1`;
+    return new Map(rows.map((r) => [String(r.key), readGenderTally(r)]));
   }
 
   /**

@@ -1,8 +1,9 @@
 import { useState, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Info } from "lucide-react";
-import { fetchGoalAchievement, type InsightSegment } from "../../services/api";
+import { fetchGoalAchievement, type GenderView, type InsightSegment } from "../../services/api";
 import { ErrorPanel, LoadingPanel, ShareBar, StatTile, ToggleGroup } from "./InsightControls";
+import { GenderControls, GenderLegend, GenderSplitBar, type GenderSplit, type GenderSplitMode } from "./GenderSplit";
 import { useInsightAsOf } from "./InsightAsOf";
 import { formatCount, formatDate, formatGroupLabel, formatPct, formatUGX, formatUGXCompact, SEGMENT_OPTIONS } from "./insightFormat";
 
@@ -16,6 +17,8 @@ interface AchievementRow {
   reachedUsedRate: number | null;
   medianProgress: number | null;
   medianTarget: number | null;
+  /** count = goals, value = goals that reached their target */
+  gender?: GenderSplit;
 }
 
 interface CountRow {
@@ -23,6 +26,8 @@ interface CountRow {
   goals: number;
   value: number;
   share: number | null;
+  /** count = goals, value = Ultima goal value */
+  gender: GenderSplit;
 }
 
 interface GoalAchievementReport {
@@ -53,7 +58,8 @@ interface GoalAchievementReport {
     medianAmountLast12Months: number | null;
   }>;
   trend: Array<{ asOf: string; goalsWithTarget: number; atTarget: number; atTargetRate: number | null }>;
-  breakdowns: Array<{ dimension: string; label: string; weighted?: boolean; rows: AchievementRow[] }>;
+  breakdowns: Array<{ dimension: string; label: string; note?: string; rows: AchievementRow[] }>;
+  genderNote: string;
 }
 
 const STATUS_LABELS: Record<string, string> = {
@@ -85,14 +91,18 @@ const Card = ({ title, subtitle, children }: { title: string; subtitle?: string;
   </div>
 );
 
-/** Table of goal counts per band with a share bar (pace and progress of goals on the way). */
-const BandTable = ({ rows, header }: { rows: CountRow[]; header: string }) => (
+/**
+ * Table of goal counts per band with a share bar (pace and progress of goals on the
+ * way), plus each band's female/male split of goals when a gender view is given.
+ */
+const BandTable = ({ rows, header, genderView }: { rows: CountRow[]; header: string; genderView?: GenderView }) => (
   <table className="w-full text-sm">
     <thead>
       <tr className="border-b border-gray-200 text-gray-600">
         <th className="text-left py-2 font-medium">{header}</th>
         <th className="text-right py-2 font-medium">Goals</th>
         <th className="text-left py-2 pl-6 font-medium">Share</th>
+        {genderView && <th className="text-left py-2 pl-6 font-medium">Female / male goals</th>}
       </tr>
     </thead>
     <tbody>
@@ -106,11 +116,24 @@ const BandTable = ({ rows, header }: { rows: CountRow[]; header: string }) => (
               <span className="text-gray-900 w-12 text-right">{formatPct(r.share, 0)}</span>
             </div>
           </td>
+          {genderView && (
+            <td className="py-2 pl-6 w-48">
+              <GenderSplitBar split={r.gender} measure="count" view={genderView} countLabel="goals" />
+            </td>
+          )}
         </tr>
       ))}
     </tbody>
   </table>
 );
+
+/** Reached rate of one side of a row's split (value = reached goals), hidden for fewer than 5 goals. */
+const reachedRate = (split: GenderSplit | undefined, side: "female" | "male") => {
+  if (!split) return null;
+  const goals = side === "female" ? split.femaleCount : split.maleCount;
+  if (goals < 5) return null;
+  return (side === "female" ? split.femaleValue : split.maleValue) / goals;
+};
 
 /**
  * Goal achievement against Ultima targets. Counts goals that reached their
@@ -121,12 +144,14 @@ const BandTable = ({ rows, header }: { rows: CountRow[]; header: string }) => (
 const GoalAchievement = () => {
   const [segment, setSegment] = useState<InsightSegment>("INDIVIDUAL");
   const [dimension, setDimension] = useState("targetSize");
+  const [genderView, setGenderView] = useState<GenderView>("IDENTIFIED");
+  const [genderSplit, setGenderSplit] = useState<GenderSplitMode>("OFF");
 
   const { asOf } = useInsightAsOf();
 
   const { data: report, error, isPending, refetch } = useQuery<GoalAchievementReport>({
-    queryKey: ["goal-achievement", segment, asOf],
-    queryFn: () => fetchGoalAchievement(segment, asOf),
+    queryKey: ["goal-achievement", segment, asOf, genderView],
+    queryFn: () => fetchGoalAchievement(segment, asOf, genderView),
   });
 
   if (isPending) return <LoadingPanel message="Working out goal achievement..." />;
@@ -138,11 +163,20 @@ const GoalAchievement = () => {
     .filter((s) => STATUS_LABELS[s.key])
     .sort((a, b) => STATUS_ORDER.indexOf(a.key) - STATUS_ORDER.indexOf(b.key));
   const maxRate = Math.max(...(breakdown?.rows.map((r) => r.everReachedRate ?? 0) ?? [0]), 0.01);
+  const splitView = segment !== "INSTITUTIONAL" && genderSplit === "ON" ? genderView : undefined;
+  // The gender breakdown is already split by gender, so it gets no extra columns
+  const showRowSplit = splitView && breakdown?.dimension !== "gender";
 
   return (
     <div className="p-6 space-y-6">
       <div className="flex flex-wrap items-center justify-between gap-3">
-        <ToggleGroup options={SEGMENT_OPTIONS} value={segment} onChange={setSegment} />
+        <div className="flex flex-wrap items-center gap-3">
+          <ToggleGroup options={SEGMENT_OPTIONS} value={segment} onChange={setSegment} />
+          {segment !== "INSTITUTIONAL" && (
+            <GenderControls view={genderView} onViewChange={setGenderView} split={genderSplit} onSplitChange={setGenderSplit} />
+          )}
+          {splitView && <GenderLegend />}
+        </div>
         <p className="text-sm text-gray-600">
           {report.asOf.valueBasis === "SYSTEM"
             ? `Goal values from transactions to ${formatDate(report.asOf.transactions)} · targets from Ultima goal statistics of ${formatDate(report.asOf.ultimaSnapshot)}`
@@ -171,6 +205,7 @@ const GoalAchievement = () => {
           Targets and current values come from Ultima. A goal counts as "reached, then used" when its net deposits in this system reached
           the target but its value is now below it, typically because the client withdrew for what they saved for. Deposits exclude
           investment growth, so this is a conservative count. Rates cover goals with a target of UGX 10k to 10bn.
+          {segment !== "INSTITUTIONAL" && ` Gender is the holder's declared gender. ${report.genderNote}`}
         </p>
       </div>
 
@@ -182,6 +217,7 @@ const GoalAchievement = () => {
               <th className="text-right py-2 font-medium">Goals</th>
               <th className="text-left py-2 pl-6 font-medium">Share of goals</th>
               <th className="text-right py-2 font-medium">Current value</th>
+              {splitView && <th className="text-left py-2 pl-6 font-medium">Female / male goals</th>}
             </tr>
           </thead>
           <tbody>
@@ -196,6 +232,11 @@ const GoalAchievement = () => {
                   </div>
                 </td>
                 <td className="py-2 text-right text-gray-900">{formatUGXCompact(s.value)}</td>
+                {splitView && (
+                  <td className="py-2 pl-6 w-48">
+                    <GenderSplitBar split={s.gender} measure="count" view={splitView} countLabel="goals" />
+                  </td>
+                )}
               </tr>
             ))}
           </tbody>
@@ -220,12 +261,14 @@ const GoalAchievement = () => {
                   <th className="text-right py-2 font-medium">Reached and used</th>
                   <th className="text-right py-2 font-medium">Median target</th>
                   <th className="text-right py-2 font-medium">Median progress (on the way)</th>
+                  {showRowSplit && <th className="text-right py-2 font-medium">Reached: women</th>}
+                  {showRowSplit && <th className="text-right py-2 font-medium">Reached: men</th>}
                 </tr>
               </thead>
               <tbody>
                 {breakdown.rows.map((r) => (
                   <tr key={r.key} className="border-b border-gray-100">
-                    <td className={`py-2 ${r.key === "UNKNOWN" || r.key.startsWith("Other") || r.key === "Not estimable" ? "text-gray-500" : "text-gray-900"}`}>
+                    <td className={`py-2 ${r.key === "UNKNOWN" || r.key.startsWith("Other") ? "text-gray-500" : "text-gray-900"}`}>
                       {formatGroupLabel(r.key)}
                     </td>
                     <td className="py-2 text-right text-gray-900">{formatCount(r.goals)}</td>
@@ -238,14 +281,17 @@ const GoalAchievement = () => {
                     <td className="py-2 text-right text-gray-900">{formatPct(r.reachedUsedRate, 1)}</td>
                     <td className="py-2 text-right text-gray-900">{formatUGX(r.medianTarget)}</td>
                     <td className="py-2 text-right text-gray-900">{formatPct(r.medianProgress, 1)}</td>
+                    {showRowSplit && <td className="py-2 text-right text-gray-900">{formatPct(reachedRate(r.gender, "female"), 1)}</td>}
+                    {showRowSplit && <td className="py-2 text-right text-gray-900">{formatPct(reachedRate(r.gender, "male"), 1)}</td>}
                   </tr>
                 ))}
               </tbody>
             </table>
-            {breakdown.weighted && (
-              <p className="text-xs text-gray-500 mt-3">
-                Probability-weighted: declared gender, else estimated from the client's name, so goal counts are estimates. Medians are
-                not available for weighted groups.
+            {breakdown.note && <p className="text-xs text-gray-500 mt-3">{breakdown.note}</p>}
+            {showRowSplit && (
+              <p className="text-xs text-gray-500 mt-2">
+                Reached: women / men = share of the group's goals that reached their target, by the holder's gender
+                {genderView === "ALLOCATED" ? " (unidentified holders allocated in the known ratio)" : " (identified holders only)"}.
               </p>
             )}
             <p className="text-xs text-gray-500 mt-2">Bars are scaled to the highest rate shown.</p>
@@ -258,10 +304,10 @@ const GoalAchievement = () => {
           title="Goals on the way: time to target"
           subtitle={`At each goal's net saving rate over the last 12 months of data (to ${formatDate(report.asOf.transactions)}). Ultima has no target dates, so this is pace, not "on track".`}
         >
-          <BandTable rows={report.paceBands} header="Time to target" />
+          <BandTable rows={report.paceBands} header="Time to target" genderView={splitView} />
         </Card>
         <Card title="Goals on the way: progress" subtitle="Current value as a share of the target">
-          <BandTable rows={report.progressBands} header="Progress" />
+          <BandTable rows={report.progressBands} header="Progress" genderView={splitView} />
         </Card>
       </div>
 

@@ -1,6 +1,7 @@
 import { NextFunction, Request, Response, Router } from 'express';
 import { BadRequestError, ConflictError, NotFoundError } from '../errors';
-import { ClientInsightsService, GenderBasis, InsightSegment } from '../services/client-insights/ClientInsightsService';
+import { ClientInsightsService, InsightSegment } from '../services/client-insights/ClientInsightsService';
+import { GENDER_VIEWS, GenderView } from '../services/client-insights/GenderAllocation';
 import { ImpactPackService } from '../services/client-insights/ImpactPackService';
 import { GoalRiskService } from '../services/client-insights/GoalRiskService';
 import { GroupSchemeService } from '../services/client-insights/GroupSchemeService';
@@ -11,7 +12,6 @@ import { InsightSources } from '../services/client-insights/InsightSources';
 import {
   AccountDirectoryFilters,
   AccountDirectoryService,
-  DirectoryEstimateFilter,
   DirectoryFundedFilter,
   DirectoryMissingFilter,
   DirectorySort,
@@ -54,19 +54,20 @@ async function readyAsOfSources(req: Request): Promise<InsightSources> {
   return resolution.sources;
 }
 
-function readGenderBasis(req: Request): GenderBasis {
-  const basis = String(req.query.genderBasis ?? 'ESTIMATED').toUpperCase();
-  if (basis !== 'ESTIMATED' && basis !== 'DECLARED') throw new BadRequestError('genderBasis must be ESTIMATED or DECLARED');
-  return basis;
+/** ?genderView=IDENTIFIED (declared gender only, the default) or ALLOCATED (unidentified split in the known ratio). */
+function readGenderView(req: Request): GenderView {
+  const view = String(req.query.genderView ?? 'IDENTIFIED').toUpperCase() as GenderView;
+  if (!GENDER_VIEWS.includes(view)) throw new BadRequestError(`genderView must be one of ${GENDER_VIEWS.join(', ')}`);
+  return view;
 }
 
 /**
- * GET /api/client-insights/summary?segment=INDIVIDUAL|INSTITUTIONAL|ALL&genderBasis=ESTIMATED|DECLARED
+ * GET /api/client-insights/summary?segment=INDIVIDUAL|INSTITUTIONAL|ALL&genderView=IDENTIFIED|ALLOCATED
  * Headline figures and AUM composition breakdowns for funded accounts
  */
 router.get('/summary', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await respondAsOf(req, res, (sources) => ClientInsightsService.getSummary(readSegment(req), readGenderBasis(req), sources));
+    await respondAsOf(req, res, (sources) => ClientInsightsService.getSummary(readSegment(req), readGenderView(req), sources));
   } catch (error) {
     next(error);
   }
@@ -85,12 +86,14 @@ router.get('/data-quality', async (req: Request, res: Response, next: NextFuncti
 });
 
 /**
- * GET /api/client-insights/risk-allocation?segment=...&limit=50
- * AUM by risk score and goal category, drift from target fund split, largest drifted goals
+ * GET /api/client-insights/risk-allocation?segment=...&limit=50&genderView=IDENTIFIED|ALLOCATED
+ * AUM by risk score and goal category (each with a female/male split), drift from target fund split, largest drifted goals
  */
 router.get('/risk-allocation', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await respondAsOf(req, res, (sources) => GoalRiskService.getRiskAllocation(readSegment(req), readLimit(req, 50), sources));
+    await respondAsOf(req, res, (sources) =>
+      GoalRiskService.getRiskAllocation(readSegment(req), readLimit(req, 50), readGenderView(req), sources)
+    );
   } catch (error) {
     next(error);
   }
@@ -121,12 +124,12 @@ router.get('/group-schemes', async (req: Request, res: Response, next: NextFunct
 });
 
 /**
- * GET /api/client-insights/goal-achievement?segment=INDIVIDUAL|INSTITUTIONAL|ALL
- * Goal target achievement: reached and holding, reached and used, progress, pace and breakdowns
+ * GET /api/client-insights/goal-achievement?segment=INDIVIDUAL|INSTITUTIONAL|ALL&genderView=IDENTIFIED|ALLOCATED
+ * Goal target achievement: reached and holding, reached and used, progress, pace and breakdowns (with female/male splits)
  */
 router.get('/goal-achievement', async (req: Request, res: Response, next: NextFunction) => {
   try {
-    await respondAsOf(req, res, (sources) => GoalAchievementService.getReport(readSegment(req), sources));
+    await respondAsOf(req, res, (sources) => GoalAchievementService.getReport(readSegment(req), readGenderView(req), sources));
   } catch (error) {
     next(error);
   }
@@ -166,7 +169,6 @@ const DIRECTORY_MISSING: DirectoryMissingFilter[] = ['ANY', 'GENDER', 'DATE_OF_B
 const DIRECTORY_FUNDED: DirectoryFundedFilter[] = ['FUNDED', 'UNFUNDED', 'ALL'];
 const DIRECTORY_CHANNELS = ['MTN', 'WEB', 'APP', 'YOLLO', 'UNKNOWN'];
 const DIRECTORY_GENDERS = ['FEMALE', 'MALE', 'UNDISCLOSED', 'UNKNOWN'];
-const DIRECTORY_ESTIMATES: DirectoryEstimateFilter[] = ['ESTIMATED', 'LOW_CONFIDENCE', 'NOT_ESTIMABLE'];
 const MAX_SEARCH_LENGTH = 100;
 
 /** Reads one optional enum query parameter, rejecting values outside the allowed list. */
@@ -182,7 +184,7 @@ function readChoice<T extends string>(req: Request, name: string, allowed: reado
 /**
  * Reads and validates the Account Profiles filters shared by the list and the
  * export: segment, funded status, sign-up channel, declared gender, missing
- * field, gender estimate status, minimum balance and a search term (name, or account number prefix).
+ * field, minimum balance and a search term (name, or account number prefix).
  */
 function readDirectoryFilters(req: Request): AccountDirectoryFilters {
   const search = req.query.search === undefined ? undefined : String(req.query.search).trim();
@@ -196,14 +198,13 @@ function readDirectoryFilters(req: Request): AccountDirectoryFilters {
     funded: readChoice(req, 'funded', DIRECTORY_FUNDED) ?? 'FUNDED',
     channel: readChoice(req, 'channel', DIRECTORY_CHANNELS),
     gender: readChoice(req, 'gender', DIRECTORY_GENDERS),
-    genderEstimate: readChoice(req, 'genderEstimate', DIRECTORY_ESTIMATES),
     missing: readChoice(req, 'missing', DIRECTORY_MISSING),
     minBalance,
   };
 }
 
 /**
- * GET /api/client-insights/accounts?search=&segment=&funded=&channel=&gender=&genderEstimate=&missing=&minBalance=
+ * GET /api/client-insights/accounts?search=&segment=&funded=&channel=&gender=&missing=&minBalance=
  *     &sort=balance|name|lastDeposit|accountNumber&direction=asc|desc&page=1&pageSize=50
  * Paged account directory with Ultima profile fields and what is missing
  */

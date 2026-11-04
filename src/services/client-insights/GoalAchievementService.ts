@@ -2,14 +2,25 @@ import { Prisma } from '@prisma/client';
 import { prisma } from '../../config/database';
 import { InsightSegment, MIN_REPORTABLE_GROUP_SIZE } from './ClientInsightsService';
 import { InsightSources, LATEST_SOURCES } from './InsightSources';
+import {
+  addGenderTallies,
+  allocateMeasure,
+  describeGenderView,
+  GenderSplit,
+  genderTallySql,
+  GenderView,
+  readGenderTally,
+  splitGender,
+} from './GenderAllocation';
 
 /** Goals with a plausible target, i.e. the base for every achievement rate. */
 const TARGETED_STATUSES = `('REACHED_HOLDING', 'REACHED_USED', 'NOT_STARTED', 'IN_PROGRESS')`;
 const UNKNOWN_KEY = 'UNKNOWN';
+const EVER_REACHED_SQL = `CASE WHEN ga.status IN ('REACHED_HOLDING', 'REACHED_USED') THEN 1 ELSE 0 END`;
 
 export interface AchievementRow {
   key: string;
-  goals: number; // probability-weighted for gender
+  goals: number; // allocated (fractional) for gender rows in ALLOCATED view
   everReached: number;
   reachedHolding: number;
   reachedUsed: number;
@@ -17,13 +28,25 @@ export interface AchievementRow {
   reachedUsedRate: number | null;
   medianProgress: number | null; // in-progress goals only
   medianTarget: number | null;
+  /** Female/male split of the row: count = goals, value = goals that reached their target. */
+  gender?: GenderSplit;
 }
 
 export interface AchievementBreakdown {
   dimension: string;
   label: string;
-  weighted?: boolean;
+  /** Set where figures are allocated rather than counted, to say how. */
+  note?: string;
   rows: AchievementRow[];
+}
+
+export interface CountRow {
+  key: string;
+  goals: number;
+  value: number;
+  share: number | null;
+  /** Female/male split of the row: count = goals, value = Ultima goal value. */
+  gender: GenderSplit;
 }
 
 interface AchievementDimension {
@@ -63,20 +86,22 @@ export class GoalAchievementService {
    * across Ultima snapshots. For a past as-at date, goal values and deposit counts come from the
    * goal's own transactions at that date's prices (targets are Ultima's current ones).
    */
-  static async getReport(segment: InsightSegment, sources: InsightSources = LATEST_SOURCES) {
+  static async getReport(segment: InsightSegment, genderView: GenderView = 'IDENTIFIED', sources: InsightSources = LATEST_SOURCES) {
     const where = this.segmentCondition(segment);
     const [headline, statuses, progressBands, paceBands, targetSetting, trend, breakdowns, gender] = await Promise.all([
       this.getHeadline(where, sources),
-      this.countByColumn(where, 'status', Prisma.sql`TRUE`, sources),
-      this.countByColumn(where, 'progress_band', Prisma.sql`ga.status = 'IN_PROGRESS'`, sources),
-      this.countByColumn(where, 'pace_band', Prisma.sql`ga.status = 'IN_PROGRESS'`, sources),
+      this.countByColumn(where, 'status', Prisma.sql`TRUE`, genderView, sources),
+      this.countByColumn(where, 'progress_band', Prisma.sql`ga.status = 'IN_PROGRESS'`, genderView, sources),
+      this.countByColumn(where, 'pace_band', Prisma.sql`ga.status = 'IN_PROGRESS'`, genderView, sources),
       this.getTargetSettingComparison(where, sources),
       this.getSnapshotTrend(segment, sources),
-      Promise.all(DIMENSIONS.map((d) => this.getBreakdown(d, where, sources))),
-      this.getWeightedGenderBreakdown(where, sources),
+      Promise.all(DIMENSIONS.map((d) => this.getBreakdown(d, where, genderView, sources))),
+      this.getGenderBreakdown(where, genderView, sources),
     ]);
     return {
       segment,
+      genderView,
+      genderNote: describeGenderView(genderView),
       asOf: {
         snapshot: sources.asOf,
         ultimaSnapshot: headline.snapshot_as_of,
@@ -122,20 +147,34 @@ export class GoalAchievementService {
     return row;
   }
 
-  /** Goals and Ultima value per value of one view column (fixed column names only). */
+  /**
+   * Goals and Ultima value per value of one view column (fixed column names only),
+   * each with its female/male split (rows with few identified holders use the ratio
+   * across all rows).
+   */
   private static async countByColumn(
     where: Prisma.Sql,
     column: 'status' | 'progress_band' | 'pace_band',
     filter: Prisma.Sql,
+    genderView: GenderView,
     sources: InsightSources
-  ) {
+  ): Promise<CountRow[]> {
     const rows = await prisma.$queryRaw<any[]>`
-      SELECT ${Prisma.raw(`ga.${column}`)} AS key, COUNT(*)::int AS goals, COALESCE(SUM(ga.ultima_value), 0)::float8 AS value
+      SELECT ${Prisma.raw(`ga.${column}`)} AS key, COUNT(*)::int AS goals, COALESCE(SUM(ga.ultima_value), 0)::float8 AS value,
+             ${Prisma.raw(genderTallySql('v.gender', 'ga.ultima_value'))}
       FROM ${sources.goalAchievement('ga')}
+      LEFT JOIN ${sources.accounts('v')} ON v.account_id = ga.account_id
       WHERE ${where} AND ${filter} AND ga.in_ultima
       GROUP BY 1 ORDER BY 1`;
     const total = rows.reduce((s, r) => s + r.goals, 0);
-    return rows.map((r) => ({ key: r.key, goals: r.goals, value: r.value, share: ratio(r.goals, total) }));
+    const baseTally = addGenderTallies(rows.map(readGenderTally));
+    return rows.map((r) => ({
+      key: r.key,
+      goals: r.goals,
+      value: r.value,
+      share: ratio(r.goals, total),
+      gender: splitGender(readGenderTally(r), genderView, baseTally),
+    }));
   }
 
   /** Do clients who set a target save differently from those who don't? */
@@ -187,7 +226,12 @@ export class GoalAchievementService {
    * Achievement rates for one dimension over goals with a plausible target.
    * Groups under the minimum size are folded into one row; Unknown comes last.
    */
-  private static async getBreakdown(definition: AchievementDimension, where: Prisma.Sql, sources: InsightSources): Promise<AchievementBreakdown> {
+  private static async getBreakdown(
+    definition: AchievementDimension,
+    where: Prisma.Sql,
+    genderView: GenderView,
+    sources: InsightSources
+  ): Promise<AchievementBreakdown> {
     const raw = await prisma.$queryRaw<any[]>`
       SELECT ${Prisma.raw(definition.expression)} AS key,
              COUNT(*)::int AS goals,
@@ -195,12 +239,15 @@ export class GoalAchievementService {
              COUNT(*) FILTER (WHERE ga.status = 'REACHED_HOLDING')::int AS reached_holding,
              COUNT(*) FILTER (WHERE ga.status = 'REACHED_USED')::int AS reached_used,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY ga.progress) FILTER (WHERE ga.status = 'IN_PROGRESS')::float8 AS median_progress,
-             percentile_cont(0.5) WITHIN GROUP (ORDER BY ga.goal_target)::float8 AS median_target
+             percentile_cont(0.5) WITHIN GROUP (ORDER BY ga.goal_target)::float8 AS median_target,
+             ${Prisma.raw(genderTallySql('v.gender', EVER_REACHED_SQL))}
       FROM ${sources.goalAchievement('ga')}
       LEFT JOIN ${sources.accounts('v')} ON v.account_id = ga.account_id
       WHERE ${where} AND ga.status IN ${Prisma.raw(TARGETED_STATUSES)}
       GROUP BY 1`;
 
+    const baseTally = addGenderTallies(raw.map(readGenderTally));
+    const genderOf = (group: any[]) => splitGender(addGenderTallies(group.map(readGenderTally)), genderView, baseTally);
     const toRow = (r: any): AchievementRow => ({
       key: String(r.key ?? UNKNOWN_KEY),
       goals: r.goals,
@@ -211,6 +258,7 @@ export class GoalAchievementService {
       reachedUsedRate: ratio(r.reached_used, r.goals),
       medianProgress: r.median_progress,
       medianTarget: r.median_target,
+      gender: genderOf([r]),
     });
     const known = raw.filter((r) => r.key !== null && r.key !== UNKNOWN_KEY);
     const unknown = raw.filter((r) => r.key === null || r.key === UNKNOWN_KEY);
@@ -222,53 +270,60 @@ export class GoalAchievementService {
 
     const shown = known.filter((r) => r.goals >= MIN_REPORTABLE_GROUP_SIZE).map(toRow);
     const small = known.filter((r) => r.goals < MIN_REPORTABLE_GROUP_SIZE);
-    if (small.length) shown.push(foldRows(`Other (groups under ${MIN_REPORTABLE_GROUP_SIZE})`, small));
-    if (unknown.length) shown.push(foldRows(UNKNOWN_KEY, unknown));
+    if (small.length) shown.push({ ...foldRows(`Other (groups under ${MIN_REPORTABLE_GROUP_SIZE})`, small), gender: genderOf(small) });
+    if (unknown.length) shown.push({ ...foldRows(UNKNOWN_KEY, unknown), gender: genderOf(unknown) });
     return { dimension: definition.dimension, label: definition.label, rows: shown };
   }
 
   /**
-   * Achievement by gender, probability-weighted like the other gender headlines:
-   * each goal counts towards Female and Male in proportion to the holder's female
-   * probability (declared = 1 or 0). Goals whose holder has no gender estimate are
-   * reported separately.
+   * Achievement by the holder's declared gender. IDENTIFIED: Female and Male goals only.
+   * ALLOCATED: goals of holders without a declared gender are split between Female and
+   * Male, each count (goals, reached, holding, used) in its own identified ratio, so
+   * the rates are those a proportional split implies. Medians are of identified goals.
    */
-  private static async getWeightedGenderBreakdown(where: Prisma.Sql, sources: InsightSources): Promise<AchievementBreakdown> {
-    const [r] = await prisma.$queryRaw<any[]>`
-      SELECT
-        COALESCE(SUM(v.female_probability), 0)::float8 AS f_goals,
-        COALESCE(SUM(v.female_probability) FILTER (WHERE ga.status IN ('REACHED_HOLDING', 'REACHED_USED')), 0)::float8 AS f_reached,
-        COALESCE(SUM(v.female_probability) FILTER (WHERE ga.status = 'REACHED_HOLDING'), 0)::float8 AS f_holding,
-        COALESCE(SUM(v.female_probability) FILTER (WHERE ga.status = 'REACHED_USED'), 0)::float8 AS f_used,
-        COALESCE(SUM(1 - v.female_probability), 0)::float8 AS m_goals,
-        COALESCE(SUM(1 - v.female_probability) FILTER (WHERE ga.status IN ('REACHED_HOLDING', 'REACHED_USED')), 0)::float8 AS m_reached,
-        COALESCE(SUM(1 - v.female_probability) FILTER (WHERE ga.status = 'REACHED_HOLDING'), 0)::float8 AS m_holding,
-        COALESCE(SUM(1 - v.female_probability) FILTER (WHERE ga.status = 'REACHED_USED'), 0)::float8 AS m_used,
-        COUNT(*) FILTER (WHERE v.female_probability IS NULL)::int AS u_goals,
-        COUNT(*) FILTER (WHERE v.female_probability IS NULL AND ga.status IN ('REACHED_HOLDING', 'REACHED_USED'))::int AS u_reached,
-        COUNT(*) FILTER (WHERE v.female_probability IS NULL AND ga.status = 'REACHED_HOLDING')::int AS u_holding,
-        COUNT(*) FILTER (WHERE v.female_probability IS NULL AND ga.status = 'REACHED_USED')::int AS u_used
+  static async getGenderBreakdown(where: Prisma.Sql, genderView: GenderView, sources: InsightSources): Promise<AchievementBreakdown> {
+    const raw = await prisma.$queryRaw<any[]>`
+      SELECT CASE WHEN v.gender IN ('FEMALE', 'MALE') THEN v.gender ELSE 'UNKNOWN' END AS key,
+             COUNT(*)::int AS goals,
+             COUNT(*) FILTER (WHERE ga.status IN ('REACHED_HOLDING', 'REACHED_USED'))::int AS ever_reached,
+             COUNT(*) FILTER (WHERE ga.status = 'REACHED_HOLDING')::int AS reached_holding,
+             COUNT(*) FILTER (WHERE ga.status = 'REACHED_USED')::int AS reached_used,
+             percentile_cont(0.5) WITHIN GROUP (ORDER BY ga.progress) FILTER (WHERE ga.status = 'IN_PROGRESS')::float8 AS median_progress,
+             percentile_cont(0.5) WITHIN GROUP (ORDER BY ga.goal_target)::float8 AS median_target
       FROM ${sources.goalAchievement('ga')}
       LEFT JOIN ${sources.accounts('v')} ON v.account_id = ga.account_id
-      WHERE ${where} AND ga.status IN ${Prisma.raw(TARGETED_STATUSES)}`;
+      WHERE ${where} AND ga.status IN ${Prisma.raw(TARGETED_STATUSES)}
+      GROUP BY 1`;
+    const empty = { goals: 0, ever_reached: 0, reached_holding: 0, reached_used: 0, median_progress: null, median_target: null };
+    const byKey = (key: string) => raw.find((r) => r.key === key) ?? empty;
+    const [f, m, u] = [byKey('FEMALE'), byKey('MALE'), byKey(UNKNOWN_KEY)];
+    const measure = (field: 'goals' | 'ever_reached' | 'reached_holding' | 'reached_used') =>
+      allocateMeasure(f[field], m[field], u[field], genderView);
+    const [goals, reached, holding, used] = [measure('goals'), measure('ever_reached'), measure('reached_holding'), measure('reached_used')];
 
-    const row = (key: string, goals: number, reached: number, holding: number, used: number): AchievementRow => ({
-      key,
-      goals,
-      everReached: reached,
-      reachedHolding: holding,
-      reachedUsed: used,
-      everReachedRate: ratio(reached, goals),
-      reachedUsedRate: ratio(used, goals),
-      medianProgress: null,
-      medianTarget: null,
-    });
-    const rows = [
-      row('FEMALE', r.f_goals, r.f_reached, r.f_holding, r.f_used),
-      row('MALE', r.m_goals, r.m_reached, r.m_holding, r.m_used),
-    ];
-    if (r.u_goals >= MIN_REPORTABLE_GROUP_SIZE) rows.push(row('Not estimable', r.u_goals, r.u_reached, r.u_holding, r.u_used));
-    return { dimension: 'gender', label: 'Gender (declared or estimated, probability-weighted)', weighted: true, rows };
+    const row = (key: 'FEMALE' | 'MALE', source: any): AchievementRow => {
+      const side = key === 'FEMALE' ? 'female' : 'male';
+      return {
+        key,
+        goals: goals[side],
+        everReached: reached[side],
+        reachedHolding: holding[side],
+        reachedUsed: used[side],
+        everReachedRate: ratio(reached[side], goals[side]),
+        reachedUsedRate: ratio(used[side], goals[side]),
+        medianProgress: source.median_progress,
+        medianTarget: source.median_target,
+      };
+    };
+    return {
+      dimension: 'gender',
+      label: genderView === 'IDENTIFIED' ? 'Gender (identified holders)' : 'Gender (all goals, unidentified allocated)',
+      note:
+        genderView === 'IDENTIFIED'
+          ? `${Math.round(u.goals).toLocaleString('en-US')} goals whose holder has no declared gender are left out.`
+          : `${Math.round(u.goals).toLocaleString('en-US')} goals whose holder has no declared gender are split in the identified ratio, so goal counts are estimates. Medians are of identified holders.`,
+      rows: [row('FEMALE', f), row('MALE', m)].filter((r) => r.goals >= MIN_REPORTABLE_GROUP_SIZE),
+    };
   }
 }
 

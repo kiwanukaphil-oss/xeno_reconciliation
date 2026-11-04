@@ -31,9 +31,9 @@ export class GroupSchemeService {
              COALESCE(SUM(m.aum), 0)::float8 AS member_aum,
              percentile_cont(0.5) WITHIN GROUP (ORDER BY m.aum) FILTER (WHERE m.is_funded)::float8 AS median_member_balance,
              COUNT(*) FILTER (WHERE m.deposits_12m > 0)::int AS depositors_12m,
-             -- Probability-weighted: declared gender counts as 1/0, name-based estimates as their probability
-             COALESCE(SUM(m.female_probability), 0)::float8 AS female_weight,
-             COUNT(m.female_probability)::int AS gender_estimable
+             -- Declared gender only; allocating the unidentified in the known ratio leaves this share unchanged
+             COUNT(*) FILTER (WHERE m.gender = 'FEMALE')::int AS female_members,
+             COUNT(*) FILTER (WHERE m.gender IN ('FEMALE', 'MALE'))::int AS gender_identified
       FROM members m
       LEFT JOIN accounts s ON s."accountNumber" = m.sponsor_account_number
       LEFT JOIN clients sc ON sc.id = s."clientId"
@@ -53,8 +53,9 @@ export class GroupSchemeService {
         memberAum: g.member_aum,
         medianMemberBalance: g.funded_members >= MIN_REPORTABLE_GROUP_SIZE ? g.median_member_balance : null,
         depositorsLast12Months: g.depositors_12m,
-        // Gender mix (declared or estimated) is only shown where enough members have one
-        femaleShareOfKnown: g.gender_estimable >= MIN_REPORTABLE_GROUP_SIZE ? g.female_weight / g.gender_estimable : null,
+        // Gender mix is only shown where enough members have declared one
+        femaleShareOfKnown: g.gender_identified >= MIN_REPORTABLE_GROUP_SIZE ? g.female_members / g.gender_identified : null,
+        genderIdentifiedMembers: g.gender_identified,
       };
     });
 

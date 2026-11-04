@@ -9,13 +9,6 @@ import AccountProfileDetail from "./AccountProfileDetail";
 
 type SortKey = NonNullable<AccountDirectoryQuery["sort"]>;
 
-export interface GenderEstimate {
-  status: "DECLARED" | "RATHER_NOT_SAY" | "ESTIMATED" | "LOW_CONFIDENCE" | "NOT_ESTIMABLE";
-  gender: "FEMALE" | "MALE" | null;
-  confidence: number | null;
-  note: string | null;
-}
-
 interface DirectoryRow {
   accountNumber: string;
   accountType: string;
@@ -24,7 +17,6 @@ interface DirectoryRow {
   balance: number;
   isFunded: boolean;
   gender: string;
-  genderEstimate: GenderEstimate;
   ageYears: number | null;
   location: string | null;
   region: string | null;
@@ -49,7 +41,6 @@ interface DirectoryFilters {
   funded: "FUNDED" | "UNFUNDED" | "ALL";
   channel: string;
   gender: string;
-  genderEstimate: string;
   missing: string;
   minBalance: string;
 }
@@ -86,45 +77,20 @@ const GENDER_OPTIONS = [
   { value: "UNKNOWN", label: "Not declared" },
 ];
 
-const ESTIMATE_OPTIONS = [
-  { value: "", label: "Any gender estimate" },
-  { value: "ESTIMATED", label: "Estimated (90%+)" },
-  { value: "LOW_CONFIDENCE", label: "Low-confidence estimate" },
-  { value: "NOT_ESTIMABLE", label: "No estimate possible" },
-];
-
 const INITIAL_FILTERS: DirectoryFilters = {
   segment: "ALL",
   funded: "FUNDED",
   channel: "",
   gender: "",
-  genderEstimate: "",
   missing: "",
   minBalance: "",
 };
 
-/** Declared gender in plain ink; otherwise the name-based estimate, visibly marked as one. */
-export const GenderCell = ({ gender, estimate }: { gender: string; estimate: GenderEstimate }) => {
+/** Declared gender as Ultima holds it; "Not declared" in muted ink. */
+export const GenderCell = ({ gender }: { gender: string }) => {
   if (gender === "FEMALE" || gender === "MALE") return <span className="text-gray-900">{formatGroupLabel(gender)}</span>;
   if (gender === "UNDISCLOSED") return <span className="text-gray-900">Rather not say</span>;
-  if (estimate.status === "NOT_ESTIMABLE") {
-    return (
-      <span className="text-gray-400" title={estimate.note ?? undefined}>
-        No estimate
-      </span>
-    );
-  }
-  const label = `${formatGroupLabel(estimate.gender ?? "")} ${Math.floor((estimate.confidence ?? 0) * 100)}%`;
-  return (
-    <span
-      className={`px-2 py-0.5 text-xs rounded-full border ${
-        estimate.status === "ESTIMATED" ? "bg-blue-50 text-blue-800 border-blue-200" : "bg-gray-50 text-gray-600 border-gray-200 border-dashed"
-      }`}
-      title={estimate.status === "ESTIMATED" ? "Estimated from name (90%+ confident)" : "Estimated from name, low confidence"}
-    >
-      est. {label}
-    </span>
-  );
+  return <span className="text-gray-400">Not declared</span>;
 };
 
 /** Returns the value once it has stopped changing for the given delay. */
@@ -167,8 +133,7 @@ const FilterSelect = ({
  * missing, for KYC follow-up and lookups. Paging, sorting and filtering run on the
  * server; the previous page stays on screen while the next loads, the following
  * page is prefetched, and search waits until typing pauses. Export streams every
- * matching account to Excel. Gender is the declared value where there is one,
- * otherwise the name-based estimate, always marked "est." with its confidence.
+ * matching account to Excel. Gender is the declared Ultima value only.
  */
 const AccountProfiles = () => {
   const queryClient = useQueryClient();
@@ -196,7 +161,6 @@ const AccountProfiles = () => {
       funded: filters.funded,
       channel: filters.channel || undefined,
       gender: filters.gender || undefined,
-      genderEstimate: filters.genderEstimate || undefined,
       missing: filters.missing || undefined,
       minBalance: minBalance !== undefined && Number.isFinite(minBalance) ? minBalance : undefined,
       sort,
@@ -278,7 +242,6 @@ const AccountProfiles = () => {
           <FilterSelect label="Missing data" value={filters.missing} options={MISSING_OPTIONS} onChange={(v) => updateFilter("missing", v)} />
           <FilterSelect label="Sign-up channel" value={filters.channel} options={CHANNEL_OPTIONS} onChange={(v) => updateFilter("channel", v)} />
           <FilterSelect label="Declared gender" value={filters.gender} options={GENDER_OPTIONS} onChange={(v) => updateFilter("gender", v)} />
-          <FilterSelect label="Gender estimate" value={filters.genderEstimate} options={ESTIMATE_OPTIONS} onChange={(v) => updateFilter("genderEstimate", v)} />
           <input
             type="number"
             min={0}
@@ -318,7 +281,7 @@ const AccountProfiles = () => {
               {isFetching && <Loader2 className="inline w-4 h-4 ml-2 animate-spin text-blue-600" />}
             </p>
             <p className="text-xs text-gray-500">
-              "est." = estimated from the client's name (not declared); hover for details. Contact details are in Ultima, not here.
+              Gender, age and location are as declared in Ultima. Contact details are in Ultima, not here.
             </p>
           </div>
 
@@ -351,7 +314,7 @@ const AccountProfiles = () => {
                     </td>
                     <td className="py-2 text-right text-gray-900 whitespace-nowrap">{formatUGX(row.balance)}</td>
                     <td className="py-2 pl-4 whitespace-nowrap">
-                      <GenderCell gender={row.gender} estimate={row.genderEstimate} />
+                      <GenderCell gender={row.gender} />
                     </td>
                     <td className="py-2 text-right text-gray-900">{row.ageYears ?? <span className="text-gray-400">–</span>}</td>
                     <td className="py-2 pl-4 text-gray-900">{row.location ?? <span className="text-gray-400">–</span>}</td>

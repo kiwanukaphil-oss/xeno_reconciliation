@@ -123,7 +123,7 @@ const GroupSchemes = () => {
             <h2 className="text-lg font-semibold text-gray-900">Groups</h2>
             <p className="text-sm text-gray-500">
               Named from the sponsor's client record where the sponsor account is in the system; otherwise shown by
-              sponsor account number. Female share counts declared gender plus name-based estimates (probability-weighted).
+              sponsor account number. Female share is of members with a declared gender.
               Gender mix and median balance are hidden for groups under 5 members.
             </p>
           </div>

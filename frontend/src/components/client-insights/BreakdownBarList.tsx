@@ -6,6 +6,8 @@ import {
   formatUGXCompact,
   isUnknownGroup,
 } from "./insightFormat";
+import type { GenderView } from "../../services/api";
+import { GenderSplitBar, type GenderSplit } from "./GenderSplit";
 
 export interface BreakdownRow {
   key: string;
@@ -15,6 +17,8 @@ export interface BreakdownRow {
   shareOfAum: number;
   medianBalance: number | null;
   averageBalance: number | null;
+  /** Female/male split of the row, for the gender view the breakdown was fetched with. */
+  gender?: GenderSplit;
 }
 
 export interface Breakdown {
@@ -23,6 +27,7 @@ export interface Breakdown {
   rows: BreakdownRow[];
   knownShareOfAccounts: number;
   knownShareOfAum: number;
+  note?: string;
 }
 
 export type InsightMetric = "aum" | "accounts";
@@ -32,6 +37,8 @@ interface BreakdownBarListProps {
   metric: InsightMetric;
   /** What the row count counts (rows reuse the "accounts" field for goal counts too). */
   countLabel?: "accounts" | "goals";
+  /** Set to show each row's female/male split under its bar (rows without a split are left as they are). */
+  genderSplitView?: GenderView;
 }
 
 /**
@@ -40,7 +47,7 @@ interface BreakdownBarListProps {
  * differences stay visible; the printed share is the true share of the total.
  * Hovering a row shows its full figures.
  */
-export const BreakdownBarList = ({ breakdown, metric, countLabel = "accounts" }: BreakdownBarListProps) => {
+export const BreakdownBarList = ({ breakdown, metric, countLabel = "accounts", genderSplitView }: BreakdownBarListProps) => {
   const shortCountLabel = countLabel === "goals" ? "goals" : "accts";
   const shareOf = (row: BreakdownRow) =>
     metric === "aum" ? row.shareOfAum : row.shareOfAccounts;
@@ -58,6 +65,7 @@ export const BreakdownBarList = ({ breakdown, metric, countLabel = "accounts" }:
           </span>
         )}
       </div>
+      {breakdown.note && <p className="text-xs text-gray-500 -mt-2 mb-4">{breakdown.note}</p>}
 
       {breakdown.rows.length === 0 ? (
         <p className="text-sm text-gray-500">No data</p>
@@ -94,6 +102,16 @@ export const BreakdownBarList = ({ breakdown, metric, countLabel = "accounts" }:
                     style={{ width: `${Math.max((share / maxShare) * 100, share > 0 ? 1 : 0)}%` }}
                   />
                 </div>
+                {genderSplitView && row.gender && (
+                  <div className="mt-1">
+                    <GenderSplitBar
+                      split={row.gender}
+                      measure={metric === "aum" ? "value" : "count"}
+                      view={genderSplitView}
+                      countLabel={countLabel}
+                    />
+                  </div>
+                )}
               </div>
             );
           })}

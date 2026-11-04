@@ -2,7 +2,6 @@ import { useEffect, type ReactNode } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { Loader2, X } from "lucide-react";
 import { fetchAccountProfileDetail } from "../../services/api";
-import type { GenderEstimate } from "./AccountProfiles";
 import { useInsightAsOf } from "./InsightAsOf";
 import { FUND_CODES, formatCount, formatDate, formatGroupLabel, formatPct, formatUGX } from "./insightFormat";
 
@@ -17,7 +16,6 @@ interface AccountDetail {
   balance: number;
   isFunded: boolean;
   gender: string;
-  genderEstimate: GenderEstimate;
   ageYears: number | null;
   dateOfBirth: string | null;
   location: string | null;
@@ -140,15 +138,7 @@ const AccountProfileDetail = ({ accountNumber, onClose }: { accountNumber: strin
 
             <Section title="Profile (from Ultima)">
               <dl className="grid grid-cols-3 gap-4">
-                <Field label="Gender (declared)">{genderLabel(data.gender)}</Field>
-                {data.gender === "UNKNOWN" && (
-                  <Field label="Gender (estimated from name)">
-                    {data.genderEstimate.gender
-                      ? `${formatGroupLabel(data.genderEstimate.gender)}, ${Math.floor((data.genderEstimate.confidence ?? 0) * 100)}% likely` +
-                        (data.genderEstimate.status === "LOW_CONFIDENCE" ? " (low confidence)" : "")
-                      : `No estimate (${data.genderEstimate.note})`}
-                  </Field>
-                )}
+                <Field label="Gender">{genderLabel(data.gender)}</Field>
                 <Field label="Date of birth">{data.dateOfBirth ? `${formatDate(data.dateOfBirth)} (age ${data.ageYears})` : null}</Field>
                 <Field label="Location">{data.location}</Field>
                 <Field label="Region">{data.region ? formatGroupLabel(data.region) : null}</Field>

@@ -217,7 +217,8 @@ export const fetchDashboardMetrics = async () => {
 // Client Insights APIs (profile-based AUM composition, data quality, impact pack)
 export type InsightSegment = "INDIVIDUAL" | "INSTITUTIONAL" | "ALL";
 
-export type GenderBasis = "ESTIMATED" | "DECLARED";
+/** IDENTIFIED = declared gender only; ALLOCATED = all clients, unidentified split in the known ratio. */
+export type GenderView = "IDENTIFIED" | "ALLOCATED";
 
 /** As-at date for Client Insights: YYYY-MM-DD, or null for Latest. */
 export type InsightAsOf = string | null;
@@ -303,14 +304,14 @@ export const fetchInsightAsOfDates = async (): Promise<InsightAsOfDates> => {
   return handleResponse(response);
 };
 
-export const fetchClientInsightsSummary = async (segment: InsightSegment, genderBasis: GenderBasis = "ESTIMATED", asOf: InsightAsOf = null) =>
-  fetchInsight(`/api/client-insights/summary?segment=${segment}&genderBasis=${genderBasis}`, asOf);
+export const fetchClientInsightsSummary = async (segment: InsightSegment, genderView: GenderView = "IDENTIFIED", asOf: InsightAsOf = null) =>
+  fetchInsight(`/api/client-insights/summary?segment=${segment}&genderView=${genderView}`, asOf);
 
 export const fetchProfileDataQuality = async (segment: InsightSegment, limit = 50, asOf: InsightAsOf = null) =>
   fetchInsight(`/api/client-insights/data-quality?segment=${segment}&limit=${limit}`, asOf);
 
-export const fetchRiskAllocation = async (segment: InsightSegment, limit = 50, asOf: InsightAsOf = null) =>
-  fetchInsight(`/api/client-insights/risk-allocation?segment=${segment}&limit=${limit}`, asOf);
+export const fetchRiskAllocation = async (segment: InsightSegment, limit = 50, asOf: InsightAsOf = null, genderView: GenderView = "IDENTIFIED") =>
+  fetchInsight(`/api/client-insights/risk-allocation?segment=${segment}&limit=${limit}&genderView=${genderView}`, asOf);
 
 export const fetchSuitabilityReview = async (limit = 50, asOf: InsightAsOf = null) =>
   fetchInsight(`/api/client-insights/suitability?limit=${limit}`, asOf);
@@ -319,8 +320,8 @@ export const fetchGroupSchemes = async (asOf: InsightAsOf = null) => fetchInsigh
 
 export const fetchImpactPack = async (asOf: InsightAsOf = null) => fetchInsight(`/api/client-insights/impact-pack`, asOf);
 
-export const fetchGoalAchievement = async (segment: InsightSegment, asOf: InsightAsOf = null) =>
-  fetchInsight(`/api/client-insights/goal-achievement?segment=${segment}`, asOf);
+export const fetchGoalAchievement = async (segment: InsightSegment, asOf: InsightAsOf = null, genderView: GenderView = "IDENTIFIED") =>
+  fetchInsight(`/api/client-insights/goal-achievement?segment=${segment}&genderView=${genderView}`, asOf);
 
 export interface AccountDirectoryQuery {
   search?: string;
@@ -328,7 +329,6 @@ export interface AccountDirectoryQuery {
   funded?: "FUNDED" | "UNFUNDED" | "ALL";
   channel?: string;
   gender?: string;
-  genderEstimate?: string;
   missing?: string;
   minBalance?: number;
   sort?: "balance" | "name" | "lastDeposit" | "accountNumber";
@@ -360,7 +360,6 @@ export const accountProfilesExportUrl = (query: AccountDirectoryQuery, asOf: Ins
     funded: query.funded,
     channel: query.channel,
     gender: query.gender,
-    genderEstimate: query.genderEstimate,
     missing: query.missing,
     minBalance: query.minBalance,
   };
